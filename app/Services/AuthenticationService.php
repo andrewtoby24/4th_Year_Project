@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Helpers\HttpException;
 use App\Models\Student;
 use App\Models\Subject;
+use App\Models\Semester;
 use App\Models\Teacher;
 use App\Models\User;
 
@@ -23,15 +24,10 @@ final class AuthenticationService
         $fullName = trim((string) ($input['full_name'] ?? ''));
         $role = (string) ($input['role'] ?? '');
         $identifier = trim((string) ($input['identifier'] ?? ''));
-        $submittedCodes = $input['subject_codes'] ?? ($input['subject_code'] ?? []);
-        if (!is_array($submittedCodes)) {
-            $submittedCodes = preg_split('/[\s,]+/', (string) $submittedCodes, -1, PREG_SPLIT_NO_EMPTY);
-        }
-        $subjectCodes = array_values(array_unique(array_filter(array_map(
-            static fn ($code): string => strtoupper(trim((string) $code)),
-            $submittedCodes
-        ))));
-        $className = strtoupper(trim((string) ($input['class_name'] ?? '')));
+        $academicYearId = (int) ($input['academic_year_id'] ?? 0);
+        $semesterId = (int) ($input['semester_id'] ?? 0);
+        $classId = (int) ($input['class_id'] ?? 0);
+        $subjectIds = $this->subjectIds($input);
 
         if (!preg_match('/^[A-Za-z0-9_.-]{3,50}$/', $username)
             || $fullName === ''
@@ -45,47 +41,32 @@ final class AuthenticationService
             $this->db->beginTransaction();
 
             $subjects = [];
-            $yearLevel = null;
+            $semesterModel = new Semester($this->db);
+            $subjectModel = new Subject($this->db);
             if ($role === 'teacher') {
-                $classNames = array_values(array_unique(array_filter(array_map(
-                    static fn (string $value): string => trim($value),
-                    explode(',', $className)
-                ))));
-                if (!$classNames || strlen(implode(',', $classNames)) > 30) {
-                    throw new HttpException('Enter one or more valid teacher classes, for example 3IT,4IT.', 422);
+                $context = $semesterModel->context($academicYearId, $semesterId, $classId);
+                if (!$context) throw new HttpException('Select a valid academic year, semester, and class.', 422);
+                $subjects = $subjectModel->selectableForTerm($academicYearId, $semesterId, $subjectIds);
+                if (count($subjects) !== count($subjectIds)) {
+                    throw new HttpException('Every selected subject must belong to the selected academic year and semester.', 422);
                 }
-                $subjectModel = new Subject($this->db);
-                $availableSubjects = [];
-                foreach ($classNames as $teacherClass) {
-                    if (!preg_match('/^([1-9])IT$/', $teacherClass)) {
-                        throw new HttpException('Use class values such as 3IT,4IT separated by commas.', 422);
-                    }
-                    $classSubjects = $subjectModel->registrationSubjectsForClass($teacherClass);
-                    if (!$classSubjects) {
-                        throw new HttpException("No subjects are configured for class {$teacherClass}.", 422);
-                    }
-                    foreach ($classSubjects as $classSubject) {
-                        $availableSubjects[$classSubject['code']] = $classSubject;
-                    }
-                }
-                $className = implode(',', $classNames);
-                if (!$subjectCodes) {
-                    throw new HttpException('Select at least one subject.', 422);
-                }
-                foreach ($subjectCodes as $subjectCode) {
-                    $subject = $availableSubjects[$subjectCode] ?? null;
-                    if (!$subject) {
-                        throw new HttpException("Subject {$subjectCode} is not available for classes {$className}.", 422);
-                    }
-                    $subjects[] = $subject;
+                if (!$subjects && $subjectModel->countForTerm($semesterId) > 0) {
+                    throw new HttpException('Select at least one subject for this academic year and semester.', 422);
                 }
             } else {
                 $identifier = strtoupper($identifier);
                 if (!preg_match('/^([1-9])IT[0-9]+$/', $identifier, $matches)) {
                     throw new HttpException('Enter a valid student roll number, for example 4IT15.', 422);
                 }
-                $yearLevel = (int) $matches[1];
-                $className = $matches[1] . 'IT';
+                $derivedYear = (int) $matches[1];
+                $context = $semesterModel->context($academicYearId, $semesterId);
+                if (!$context || (int) $context['year_level'] !== $derivedYear) {
+                    throw new HttpException('The selected academic year must match the existing student number.', 422);
+                }
+                $class = $semesterModel->defaultClassForYear($academicYearId);
+                if (!$class) throw new HttpException('No class is configured for the selected academic year.', 422);
+                $context['class_id'] = $class['id'];
+                $context['class_name'] = $class['name'];
             }
 
             $userId = $this->users()->create(
@@ -97,9 +78,9 @@ final class AuthenticationService
             );
 
             if ($role === 'student') {
-                (new Student($this->db))->create($userId, $identifier, $className, $yearLevel);
+                (new Student($this->db))->create($userId, $identifier, $context);
             } else {
-                (new Teacher($this->db))->create($userId, $className, $subjects);
+                (new Teacher($this->db))->create($userId, $context, $subjects);
             }
 
             $this->db->commit();
@@ -116,6 +97,38 @@ final class AuthenticationService
         }
 
         return ['message' => 'Registration submitted for administrator approval.'];
+    }
+
+    public function updateTeacherAssignments(int $userId, array $input): array
+    {
+        $academicYearId = (int) ($input['academic_year_id'] ?? 0);
+        $semesterId = (int) ($input['semester_id'] ?? 0);
+        $classId = (int) ($input['class_id'] ?? 0);
+        $subjectIds = $this->subjectIds($input);
+        $context = (new Semester($this->db))->context($academicYearId, $semesterId, $classId);
+        if (!$context) throw new HttpException('Select a valid academic year, semester, and class.', 422);
+        $subjectModel = new Subject($this->db);
+        $subjects = $subjectModel->selectableForTerm($academicYearId, $semesterId, $subjectIds);
+        if (count($subjects) !== count($subjectIds)) {
+            throw new HttpException('Every selected subject must belong to the selected academic year and semester.', 422);
+        }
+        if (!$subjects && $subjectModel->countForTerm($semesterId) > 0) {
+            throw new HttpException('Select at least one subject for this academic year and semester.', 422);
+        }
+
+        $this->db->beginTransaction();
+        try {
+            (new Teacher($this->db))->replaceTerm($userId, $context, $subjects);
+            $this->db->commit();
+        } catch (\DomainException $exception) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            throw new HttpException($exception->getMessage(), 409);
+        } catch (\Throwable $exception) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            throw $exception;
+        }
+        $account = $this->users()->byId($userId);
+        return ['message' => 'Academic assignment saved.', 'user' => $this->safeUser($account)];
     }
 
     public function login(array $input): array
@@ -259,12 +272,11 @@ final class AuthenticationService
             $teacher = $teacherModel->byUser((int) $user['id']);
             if ($teacher) {
                 $subjects = array_map(static function (array $subject): array {
-                    $subject['id'] = (int) $subject['id'];
-                    $subject['year_level'] = (int) $subject['year_level'];
                     return $subject;
                 }, $teacherModel->subjectsByUser((int) $user['id']));
                 $safe['subjects'] = $subjects;
-                $safe['class_name'] = $teacher['class_name'];
+                $safe['terms'] = $teacherModel->termsByUser((int) $user['id']);
+                $safe['class_name'] = implode(',', array_values(array_unique(array_column($safe['terms'], 'class_name'))));
                 $safe['year_levels'] = array_values(array_unique(array_column($subjects, 'year_level')));
                 // Retain the old fields for older clients while the array is authoritative.
                 $safe['subject'] = $subjects[0] ?? null;
@@ -272,13 +284,24 @@ final class AuthenticationService
                 $safe['welcome_message'] = 'Welcome, ' . $user['full_name'] . '!';
             }
         } elseif ($user['role'] === 'student') {
-            $student = (new Student($this->db))->byUser((int) $user['id']);
+            $student = (new Student($this->db))->profile((int) $user['id']);
             if ($student) {
                 $safe['class_name'] = $student['class_name'];
                 $safe['year_level'] = (int) $student['year_level'];
+                $safe['class_id'] = (int) $student['class_id'];
+                $safe['semester_id'] = (int) $student['semester_id'];
+                $safe['academic_year'] = ['id' => (int) $student['academic_year_id'], 'year_level' => (int) $student['year_level'], 'name' => $student['academic_year_name']];
+                $safe['semester'] = ['id' => (int) $student['semester_id'], 'number' => (int) $student['semester_number'], 'name' => $student['semester_name']];
             }
         }
 
         return $safe;
+    }
+
+    private function subjectIds(array $input): array
+    {
+        $values = $input['subject_ids'] ?? [];
+        if (!is_array($values)) $values = [$values];
+        return array_values(array_unique(array_filter(array_map('intval', $values))));
     }
 }

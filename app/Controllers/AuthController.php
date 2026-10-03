@@ -5,5 +5,5 @@ final class AuthController extends BaseController {
     public function login():array{return $this->auth()->login($this->input);}
     public function logout():array{return $this->auth()->logout();}
     public function me():array{return ['user'=>$this->auth()->current()];}
-    public function registrationSubjects():array{return ['subjects'=>(new Subject($this->db))->registrationSubjects()];}
+    public function registrationSubjects():array{return (new Subject($this->db))->registrationCatalog();}
 }

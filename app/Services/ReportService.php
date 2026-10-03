@@ -25,7 +25,14 @@ final class ReportService
 
         return $user['role'] === 'student'
             ? $this->studentMonthly($user, $month, $start, $end)
-            : $this->teacherMonthly($user, $month, $start, $end, (int)($filters['subject_id'] ?? 0), (int)($filters['year_level'] ?? 0));
+            : $this->teacherMonthly(
+                $user,
+                $month,
+                $start,
+                $end,
+                (int)($filters['teacher_subject_id'] ?? 0),
+                (int)($filters['subject_id'] ?? 0)
+            );
     }
 
     private function studentMonthly(array $user, string $month, string $start, string $end): array
@@ -34,32 +41,36 @@ final class ReportService
         if (!$student) throw new HttpException('Student account not found.', 404);
 
         $statement = $this->db->prepare(
-            "SELECT sub.id,sub.code,sub.name,
+            "SELECT sub.id,sub.code,sub.name,sub.semester_id,
                     COUNT(DISTINCT x.id) total_sessions,
                     COUNT(DISTINCT CASE WHEN a.status IN ('present','late') THEN a.session_id END) attended
              FROM subjects sub
              LEFT JOIN attendance_sessions x ON x.subject_id=sub.id AND x.starts_at>=? AND x.starts_at<?
+                AND EXISTS (
+                    SELECT 1 FROM teacher_subjects tsa JOIN teacher_terms tt ON tt.id=tsa.teacher_term_id
+                    WHERE tsa.id=x.teacher_subject_id AND tt.class_id=? AND tt.semester_id=?
+                )
              LEFT JOIN attendance a ON a.session_id=x.id AND a.student_id=?
-             WHERE sub.year_level=? AND sub.teacher_registration_enabled=1
-             GROUP BY sub.id,sub.code,sub.name ORDER BY sub.code"
+             WHERE sub.semester_id=? AND sub.teacher_registration_enabled=1
+             GROUP BY sub.id,sub.code,sub.name,sub.semester_id ORDER BY sub.name,sub.id"
         );
-        $statement->execute([$start, $end, $student['id'], $student['year_level']]);
+        $statement->execute([$start, $end, $student['class_id'], $student['semester_id'], $student['id'], $student['semester_id']]);
 
-        return $this->response($statement->fetchAll(), $month, (int) $student['year_level']);
+        $response = $this->response($statement->fetchAll(), $month, (int) $student['year_level']);
+        $response['semester_id'] = (int) $student['semester_id'];
+        return $response;
     }
 
-    private function teacherMonthly(array $user, string $month, string $start, string $end, int $subjectId, int $yearLevel): array
+    private function teacherMonthly(array $user, string $month, string $start, string $end, int $assignmentId, int $subjectId): array
     {
         $teacherModel = new Teacher($this->db);
         $teacher = $teacherModel->byUser((int) $user['id']);
         if (!$teacher) throw new HttpException('Teacher account not found.', 404);
         $subjects = $teacherModel->subjectsByUser((int)$user['id']);
         if (!$subjects) throw new HttpException('No subjects are assigned to this teacher.', 422);
-        if (!$subjectId) $subjectId = (int)$subjects[0]['id'];
-        $subject = $teacherModel->subjectForTeacher((int)$teacher['id'], $subjectId);
+        if (!$assignmentId && !$subjectId) $assignmentId = (int)$subjects[0]['assignment_id'];
+        $subject = $teacherModel->assignmentForTeacher((int)$teacher['id'], $assignmentId, $subjectId);
         if (!$subject) throw new HttpException('That subject is not assigned to this teacher.', 403);
-        if (!$yearLevel) $yearLevel = (int)$subject['year_level'];
-        if ($yearLevel !== (int)$subject['year_level']) throw new HttpException('The selected subject does not belong to the selected year level.', 422);
 
         $statement = $this->db->prepare(
             "SELECT s.id student_id,u.full_name,s.student_no,sub.code,sub.name,
@@ -67,14 +78,18 @@ final class ReportService
                     COUNT(DISTINCT CASE WHEN a.status IN ('present','late') THEN a.session_id END) attended
              FROM students s JOIN users u ON u.id=s.user_id AND u.status='active'
              JOIN subjects sub ON sub.id=?
-             LEFT JOIN attendance_sessions x ON x.subject_id=sub.id AND x.teacher_id=? AND x.year_level=? AND x.starts_at>=? AND x.starts_at<?
+             LEFT JOIN attendance_sessions x ON x.teacher_subject_id=? AND x.starts_at>=? AND x.starts_at<?
              LEFT JOIN attendance a ON a.session_id=x.id AND a.student_id=s.id
-             WHERE s.year_level=? GROUP BY s.id,u.full_name,s.student_no,sub.code,sub.name ORDER BY u.full_name"
+             WHERE s.semester_id=? AND s.class_id=?
+             GROUP BY s.id,u.full_name,s.student_no,sub.code,sub.name ORDER BY u.full_name"
         );
-        $statement->execute([$subjectId, $teacher['id'], $yearLevel, $start, $end, $yearLevel]);
-        $response=$this->response($statement->fetchAll(), $month, $yearLevel);
-        $response['subject']=['id'=>(int)$subject['id'],'code'=>$subject['code'],'name'=>$subject['name']];
-        $response['subjects']=array_map(static function(array $item):array{$item['id']=(int)$item['id'];$item['year_level']=(int)$item['year_level'];return $item;},$subjects);
+        $statement->execute([$subject['id'], $subject['assignment_id'], $start, $end, $subject['semester_id'], $subject['class_id']]);
+        $response=$this->response($statement->fetchAll(), $month, (int)$subject['year_level']);
+        $response['subject']=['id'=>(int)$subject['id'],'assignment_id'=>(int)$subject['assignment_id'],'code'=>$subject['code'],'name'=>$subject['name']];
+        $response['academic_year']=['id'=>(int)$subject['academic_year_id'],'year_level'=>(int)$subject['year_level'],'name'=>$subject['academic_year_name']];
+        $response['semester']=['id'=>(int)$subject['semester_id'],'number'=>(int)$subject['semester_number'],'name'=>$subject['semester_name']];
+        $response['class']=['id'=>(int)$subject['class_id'],'name'=>$subject['class_name']];
+        $response['subjects']=$subjects;
         return $response;
     }
 
@@ -84,12 +99,14 @@ final class ReportService
             $attended = (int) $row['attended'];
             $total = (int) $row['total_sessions'];
             $percentage = AttendanceCalculator::percentage($attended, $total);
+            $meetsRequirement = $percentage >= self::REQUIRED_PERCENTAGE;
             return array_merge($row, [
                 'attended' => $attended,
                 'total_sessions' => $total,
                 'percentage' => $percentage,
-                'meets_requirement' => $percentage >= self::REQUIRED_PERCENTAGE,
-                'status' => $percentage >= self::REQUIRED_PERCENTAGE ? 'Good standing' : 'Below requirement',
+                'meets_requirement' => $meetsRequirement,
+                'highlight_red' => !$meetsRequirement,
+                'status' => $meetsRequirement ? 'Good standing' : 'Below requirement',
             ]);
         }, $rows);
 

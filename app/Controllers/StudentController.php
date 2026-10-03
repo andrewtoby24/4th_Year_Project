@@ -25,12 +25,16 @@ final class StudentController extends BaseController
     {
         $user = $this->auth()->role('student');
         $student = (new Student($this->db))->byUser($user['id']);
-        return ['schedules' => (new Schedule($this->db))->forStudent((int) $student['year_level'])];
+        return ['schedules' => (new Schedule($this->db))->forStudent((int) $student['semester_id'])];
     }
 
     public function scan(): array
     {
         $user = $this->auth()->role('student');
-        return (new AttendanceService($this->db))->scan($user['id'], trim((string) ($this->input['token'] ?? '')));
+        return (new AttendanceService($this->db))->scan(
+            $user['id'],
+            trim((string) ($this->input['token'] ?? '')),
+            $this->input
+        );
     }
 }
