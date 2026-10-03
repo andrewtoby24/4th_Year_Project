@@ -6,18 +6,30 @@ final class Teacher extends BaseModel
 {
     public function create(int $userId, array $context, array $subjects): void
     {
-        $primary = $subjects[0] ?? null;
+        $this->createWithTerms($userId, [['context' => $context, 'subjects' => $subjects]]);
+    }
+
+    public function createWithTerms(int $userId, array $terms): void
+    {
+        if (!$terms) throw new \InvalidArgumentException('At least one teacher term is required.');
+        $primary = null;
+        $classNames = [];
+        foreach ($terms as $term) {
+            $classNames[] = $term['context']['class_name'];
+            if ($primary === null && !empty($term['subjects'])) $primary = $term['subjects'][0];
+        }
         $this->db->prepare(
             'INSERT INTO teachers(user_id,class_name,subject_id,subject_code,year_level) VALUES(?,?,?,?,?)'
         )->execute([
             $userId,
-            $context['class_name'],
+            implode(',', array_values(array_unique($classNames))),
             $primary['id'] ?? null,
             $primary['code'] ?? null,
-            $context['year_level'],
+            $primary['year_level'] ?? $terms[0]['context']['year_level'],
         ]);
         $teacherId = (int) $this->db->lastInsertId();
-        $this->storeTerm($teacherId, $context, $subjects);
+        foreach ($terms as $term) $this->storeTerm($teacherId, $term['context'], $term['subjects']);
+        $this->syncLegacyFields($teacherId);
     }
 
     public function byUser(int $userId): ?array

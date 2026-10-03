@@ -41,17 +41,31 @@ final class AuthenticationService
             $this->db->beginTransaction();
 
             $subjects = [];
+            $teacherTerms = [];
             $semesterModel = new Semester($this->db);
             $subjectModel = new Subject($this->db);
             if ($role === 'teacher') {
-                $context = $semesterModel->context($academicYearId, $semesterId, $classId);
-                if (!$context) throw new HttpException('Select a valid academic year, semester, and class.', 422);
-                $subjects = $subjectModel->selectableForTerm($academicYearId, $semesterId, $subjectIds);
-                if (count($subjects) !== count($subjectIds)) {
-                    throw new HttpException('Every selected subject must belong to the selected academic year and semester.', 422);
-                }
-                if (!$subjects && $subjectModel->countForTerm($semesterId) > 0) {
-                    throw new HttpException('Select at least one subject for this academic year and semester.', 422);
+                $classNames = $this->teacherClassNames($input);
+                if ($classNames) {
+                    $teacherTerms = $this->teacherRegistrationTerms(
+                        $classNames,
+                        (int) ($input['semester_number'] ?? 0),
+                        $subjectIds,
+                        $semesterModel,
+                        $subjectModel
+                    );
+                } else {
+                    // Backward compatibility for clients that still submit one exact term.
+                    $context = $semesterModel->context($academicYearId, $semesterId, $classId);
+                    if (!$context) throw new HttpException('Select a valid academic year, semester, and class.', 422);
+                    $subjects = $subjectModel->selectableForTerm($academicYearId, $semesterId, $subjectIds);
+                    if (count($subjects) !== count($subjectIds)) {
+                        throw new HttpException('Every selected subject must belong to the selected academic year and semester.', 422);
+                    }
+                    if (!$subjects && $subjectModel->countForTerm($semesterId) > 0) {
+                        throw new HttpException('Select at least one subject for this academic year and semester.', 422);
+                    }
+                    $teacherTerms[] = ['context' => $context, 'subjects' => $subjects];
                 }
             } else {
                 $identifier = strtoupper($identifier);
@@ -80,7 +94,7 @@ final class AuthenticationService
             if ($role === 'student') {
                 (new Student($this->db))->create($userId, $identifier, $context);
             } else {
-                (new Teacher($this->db))->create($userId, $context, $subjects);
+                (new Teacher($this->db))->createWithTerms($userId, $teacherTerms);
             }
 
             $this->db->commit();
@@ -303,5 +317,79 @@ final class AuthenticationService
         $values = $input['subject_ids'] ?? [];
         if (!is_array($values)) $values = [$values];
         return array_values(array_unique(array_filter(array_map('intval', $values))));
+    }
+
+    private function teacherClassNames(array $input): array
+    {
+        $values = $input['class_names'] ?? ($input['class_name'] ?? []);
+        if (!is_array($values)) $values = preg_split('/,/', (string) $values, -1, PREG_SPLIT_NO_EMPTY);
+        $names = array_map(static function ($value): string {
+            $name = strtoupper(trim((string) $value));
+            return preg_match('/^IT([1-9])$/', $name, $matches) ? $matches[1] . 'IT' : $name;
+        }, $values);
+        return array_values(array_unique(array_filter($names)));
+    }
+
+    private function teacherRegistrationTerms(
+        array $classNames,
+        int $semesterNumber,
+        array $subjectIds,
+        Semester $semesterModel,
+        Subject $subjectModel
+    ): array {
+        if (!in_array($semesterNumber, [1, 2], true)) {
+            throw new HttpException('Select either 1st Semester or 2nd Semester.', 422);
+        }
+        if (!$subjectIds) throw new HttpException('Select at least one subject you teach.', 422);
+        if (strlen(implode(',', $classNames)) > 30) {
+            throw new HttpException('The combined teacher class list is too long.', 422);
+        }
+
+        $catalog = $semesterModel->catalog();
+        $terms = [];
+        $acceptedSubjectIds = [];
+        foreach ($classNames as $className) {
+            $class = null;
+            foreach ($catalog['classes'] as $candidate) {
+                if (strtoupper((string) $candidate['name']) === $className) {
+                    $class = $candidate;
+                    break;
+                }
+            }
+            if (!$class) throw new HttpException("Unknown teacher class: {$className}.", 422);
+
+            $semester = null;
+            foreach ($catalog['semesters'] as $candidate) {
+                if ((int) $candidate['academic_year_id'] === (int) $class['academic_year_id']
+                    && (int) $candidate['semester_number'] === $semesterNumber) {
+                    $semester = $candidate;
+                    break;
+                }
+            }
+            if (!$semester) throw new HttpException("No matching semester is configured for {$className}.", 422);
+
+            $context = $semesterModel->context(
+                (int) $class['academic_year_id'],
+                (int) $semester['id'],
+                (int) $class['id']
+            );
+            if (!$context) throw new HttpException("The class and semester combination for {$className} is invalid.", 422);
+
+            $subjects = $subjectModel->selectableForTerm(
+                (int) $class['academic_year_id'],
+                (int) $semester['id'],
+                $subjectIds
+            );
+            if (!$subjects) {
+                throw new HttpException("Select at least one {$semester['name']} subject for {$className}.", 422);
+            }
+            foreach ($subjects as $subject) $acceptedSubjectIds[(int) $subject['id']] = true;
+            $terms[] = ['context' => $context, 'subjects' => $subjects];
+        }
+
+        if (count($acceptedSubjectIds) !== count($subjectIds)) {
+            throw new HttpException('Every selected subject must belong to an entered class and the selected semester.', 422);
+        }
+        return $terms;
     }
 }
