@@ -7,7 +7,7 @@ const admin = createClient(url, serviceKey, { auth: { persistSession: false, aut
 const allowedOrigins = (Deno.env.get("APP_ALLOWED_ORIGINS") || "*").split(",").map((x) => x.trim());
 
 class HttpError extends Error {
-  constructor(message: string, public status = 400, public code = "REQUEST_FAILED") { super(message); }
+  constructor(message: string, public status = 400, public code = "REQUEST_FAILED", public extra: Record<string, any> = {}) { super(message); }
 }
 const ok = <T>(result: { data: T | null; error: { message: string } | null }): T => {
   if (result.error) throw new HttpError(result.error.message, 400);
@@ -506,7 +506,7 @@ async function api(request: Request) {
 
     if (effectiveDistance > radius) {
       const distMeters = Math.round(rawDistance);
-      throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${radius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA");
+      throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${radius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA", { distance_from_classroom: distMeters, distance: distMeters, allowed_radius: radius });
     }
     // Determine late status
     const lateThresholdMinutes = Number(Deno.env.get("LATE_THRESHOLD_MINUTES") || 0);
@@ -765,5 +765,5 @@ Deno.serve(async (request: Request) => {
   const origin = allowed ? (requestOrigin || "*") : "";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": origin || "*", "Access-Control-Allow-Headers": "authorization, apikey, content-type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Vary": "Origin" } });
   if (!allowed) return json({ message: "Origin not allowed." }, 403, "");
-  try { return json(await api(request), 200, origin); } catch (error) { const err = error instanceof HttpError ? error : new HttpError(error instanceof Error ? error.message : "Unexpected server error.", 500, "SERVER_ERROR"); return json({ code: err.code, message: err.message }, err.status, origin); }
+  try { return json(await api(request), 200, origin); } catch (error) { const err = error instanceof HttpError ? error : new HttpError(error instanceof Error ? error.message : "Unexpected server error.", 500, "SERVER_ERROR"); return json({ code: err.code, message: err.message, ...err.extra }, err.status, origin); }
 });

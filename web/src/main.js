@@ -42,7 +42,13 @@ const call = async (action, {method='GET', body, query=''} = {}) => {
   try { response = await fetch(`${API_URL}?action=${encodeURIComponent(action)}${query}`, {method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'omit'}); }
   catch { throw new Error('Could not reach the API. Check its URL, hosting status, and CORS settings.'); }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) { const err = new Error(data.message || 'The request failed.'); err.code = data.code; throw err; }
+  if (!response.ok) {
+    const err = new Error(data.message || 'The request failed.');
+    err.code = data.code;
+    err.distance_from_classroom = data.distance_from_classroom;
+    err.distance = data.distance || data.distance_from_classroom;
+    throw err;
+  }
   return data;
 };
 
@@ -773,8 +779,7 @@ async function submitScan(){
     }
   },e=>{
     const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS/Wi-Fi location and retry.';
-    if(e.code===1) showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
-    else showOutOfRadiusModal(errMsg);
+    showLocationHelpModal(errMsg);
     if(alertBox){
       alertBox.innerHTML=`<div class="geofence-alert">
         <h4>📍 Location Access Error</h4>
@@ -788,6 +793,8 @@ async function submitScan(){
 function showOutOfRadiusModal(message, distance) {
   const existing = document.querySelector('#modal-out-of-radius');
   if (existing) existing.remove();
+  const numDist = Number(distance);
+  const distText = Number.isFinite(numDist) && numDist > 0 ? `Your Distance: ${Math.round(numDist)}m from classroom` : `Position: Outside 100m attendance area`;
   const container = document.createElement('div');
   container.innerHTML = `<div class="modal-overlay" id="modal-out-of-radius">
     <div class="modal-card" style="text-align:center;border:2px solid #e07267;background:#fffaf0;width:min(100%,480px)">
@@ -795,7 +802,7 @@ function showOutOfRadiusModal(message, distance) {
       <h3 style="margin:0 0 10px;color:#913b30;font-size:22px;letter-spacing:-0.02em">Out of Attendance Area</h3>
       <div style="background:#fdf0ed;border:1px solid #e49f98;padding:16px;border-radius:12px;margin-bottom:18px">
         <p style="margin:0 0 8px;font-weight:700;font-size:15px;color:#8a2720">${esc(message)}</p>
-        ${distance ? `<span class="pill absent" style="font-size:14px;padding:6px 14px">Your Distance: ${Math.round(distance)}m from classroom</span>` : ''}
+        <span class="pill absent" style="font-size:14px;padding:6px 14px">${esc(distText)}</span>
       </div>
 
       <div style="background:#fff;border:1px solid var(--line);padding:14px;border-radius:10px;text-align:left;font-size:13px;line-height:1.6;margin-bottom:18px;color:var(--navy)">
