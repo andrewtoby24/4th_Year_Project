@@ -592,7 +592,18 @@ async function loadSessions(){
   const selector=document.querySelector('#sessions-assignment');if(!selector)return;
   const data=await call('attendance/sessions',{query:`&teacher_subject_id=${selector.value}`});
   const list=document.querySelector('#session-list');
-  list.innerHTML=(data.sessions||[]).map(s=>`<div class="session-row"><div><b>${esc(s.title)}</b><small>${dateTime(s.starts_at)} · ${esc(s.status)}</small></div><button class="button small" data-action="session-detail" data-id="${s.id}">View check-ins</button></div>`).join('')||'<p class="muted">No sessions yet.</p>';
+  list.innerHTML=(data.sessions||[]).map(s=>`<div class="session-row">
+    <div>
+      <b>${esc(s.title)}</b>
+      <small>${dateTime(s.starts_at)} · <span class="pill ${s.active?'good':''}">${s.status}</span></small>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <span class="pill good" style="font-size:11px;padding:3px 8px">${s.present||0} Present</span>
+        <span class="pill late" style="font-size:11px;padding:3px 8px">${s.late||0} Late</span>
+        <span class="pill absent" style="font-size:11px;padding:3px 8px">${s.absent||0} Absent</span>
+      </div>
+    </div>
+    <button class="button small primary" data-action="session-detail" data-id="${s.id}">👤 View Student Names</button>
+  </div>`).join('')||'<p class="muted">No sessions yet.</p>';
 }
 async function attendancePage(){
   const assignments=user.subjects||[];
@@ -602,7 +613,18 @@ async function attendancePage(){
 async function loadAttendanceSessions(){
   const sel=document.querySelector('#attendance-assignment');if(!sel)return;
   const d=await call('attendance/sessions',{query:`&teacher_subject_id=${sel.value}`});
-  document.querySelector('#attendance-sessions').innerHTML=(d.sessions||[]).map(s=>`<div class="session-row"><div><b>${esc(s.title)}</b><small>${dateTime(s.starts_at)} · ${s.active?'Active':'Ended'}</small></div><button class="button small" data-action="session-detail" data-id="${s.id}">Check-ins</button></div>`).join('')||'<p class="muted">No sessions for this assignment.</p>';
+  document.querySelector('#attendance-sessions').innerHTML=(d.sessions||[]).map(s=>`<div class="session-row">
+    <div>
+      <b>${esc(s.title)}</b>
+      <small>${dateTime(s.starts_at)} · <span class="pill ${s.active?'good':''}">${s.active?'Active':'Ended'}</span></small>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <span class="pill good" style="font-size:11px;padding:3px 8px">${s.present||0} Present</span>
+        <span class="pill late" style="font-size:11px;padding:3px 8px">${s.late||0} Late</span>
+        <span class="pill absent" style="font-size:11px;padding:3px 8px">${s.absent||0} Absent</span>
+      </div>
+    </div>
+    <button class="button small primary" data-action="session-detail" data-id="${s.id}">👤 View Student Names</button>
+  </div>`).join('')||'<p class="muted">No sessions for this assignment.</p>';
 }
 async function assignmentPage(){
   const assignments=user.subjects||[];
