@@ -48,9 +48,86 @@ const call = async (action, {method='GET', body, query=''} = {}) => {
 
 // Warm up the Edge Function on load to reduce cold-start lag
 function warmUpApi() {
-  if (SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY) {
-    fetch(`${API_URL}?action=health`, { method: 'GET', headers: { 'apikey': SUPABASE_PUBLISHABLE_KEY }, credentials: 'omit' }).catch(() => {});
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) return;
+  fetch(`${API_URL}?action=health`, { method: 'GET', headers: { 'apikey': SUPABASE_PUBLISHABLE_KEY }, credentials: 'omit' }).catch(() => {});
+}
+// Keep Edge Function warm every 4 minutes — prevents cold-start lag entirely
+setInterval(warmUpApi, 4 * 60 * 1000);
+
+// ---------- Stale-while-revalidate cache ----------
+// Shows cached data INSTANTLY, then silently refreshes in background.
+// Result: pages feel instant even on high-latency VPN connections.
+const _cache = new Map(); // key -> { data, ts }
+const CACHE_TTL = 60000;  // 60 seconds — stale data still shown, fresh loaded silently
+
+async function callCached(action, opts = {}, ttl = CACHE_TTL) {
+  const key = action + (opts.query || '');
+  const cached = _cache.get(key);
+  const now = Date.now();
+
+  if (cached && (now - cached.ts) < ttl) {
+    // Still fresh — return immediately, no network
+    return cached.data;
   }
+
+  if (cached) {
+    // Stale — return old data NOW (instant), fetch fresh in background
+    call(action, opts).then(fresh => {
+      _cache.set(key, { data: fresh, ts: Date.now() });
+      // Silently re-render current page if still on same page
+      if (page === _currentRenderPage) _silentRefresh(action, fresh);
+    }).catch(() => {});
+    return cached.data;
+  }
+
+  // No cache — must wait for network (first visit)
+  const data = await call(action, opts);
+  _cache.set(key, { data, ts: Date.now() });
+  return data;
+}
+function invalidateCache(action, query = '') {
+  _cache.delete(action + query);
+}
+let _currentRenderPage = '';
+const _silentUpdaters = new Map(); // action -> updater fn, registered per page
+function onSilentRefresh(action, query, fn) {
+  _silentUpdaters.set(action + query, fn);
+}
+function _silentRefresh(action, fresh) {
+  const key = action;
+  // Find any updater registered for this action prefix
+  for (const [k, fn] of _silentUpdaters) {
+    if (k.startsWith(key)) { try { fn(fresh); } catch(_) {} }
+  }
+}
+
+// ---------- Skeleton loaders ----------
+// Shown immediately while network loads — makes the app feel instant
+function skeletonRows(cols, count = 4) {
+  return Array.from({length: count}, () =>
+    `<tr>${Array.from({length: cols}, () => '<td><span class="skel"></span></td>').join('')}</tr>`
+  ).join('');
+}
+function skeletonCard(lines = 3) {
+  return `<div class="skel-block">${Array.from({length: lines}, () => '<span class="skel skel-line"></span>').join('')}</div>`;
+}
+function skeletonStats(count = 2) {
+  return `<div class="stats${count===3?' three':''}">${Array.from({length: count}, () => '<div class="stat"><span class="skel skel-line"></span><strong class="skel" style="height:36px;display:block;border-radius:6px"></strong></div>').join('')}</div>`;
+}
+
+// ---------- Nav hover prefetch ----------
+// Starts fetching data before the user even clicks — very effective on slow connections
+const _prefetchMap = {}; // page -> fetch fn
+function registerPrefetch(pageName, fn) { _prefetchMap[pageName] = fn; }
+function attachNavPrefetch() {
+  document.querySelectorAll('.nav-link').forEach(link => {
+    const key = link.getAttribute('href')?.slice(1);
+    if (!key || !_prefetchMap[key]) return;
+    let timer;
+    link.addEventListener('mouseenter', () => { timer = setTimeout(() => _prefetchMap[key](), 80); });
+    link.addEventListener('mouseleave', () => clearTimeout(timer));
+    link.addEventListener('touchstart', () => _prefetchMap[key](), {passive:true});
+  });
 }
 
 const notice = (message, kind='') => { const el=document.querySelector('#notice'); if(el){el.className=`notice ${kind}`;el.textContent=message;} };
@@ -65,6 +142,8 @@ function shell(content) {
     ? [['dashboard','Dashboard','◫'],['create','Create QR session','▦'],['attendance','Attendance','☷'],['reports','Reports','▤'],['assignments','Academic assignments','⌘']]
     : [['dashboard','Dashboard','◫'],['scan','Scan QR','▦'],['monthly','Monthly attendance','▤'],['history','Attendance history','◷']];
   app.innerHTML=`<aside class="sidebar"><div class="brand">Easy<span>Attend</span><b>◉</b></div><div class="identity"><strong>${esc(user.full_name)}</strong><small>${esc(user.role)}</small></div><nav>${nav(items)}</nav><button class="logout" data-action="logout">Log out</button></aside><main class="main"><div class="mobile-brand">Easy<span>Attend</span></div><div id="notice" class="notice" role="status"></div>${content}</main>`;
+  // Attach hover-prefetch after DOM is updated
+  setTimeout(attachNavPrefetch, 0);
 }
 function heading(kicker,title,subtitle=''){return `<header class="page-heading"><div><p class="eyebrow">${esc(kicker)}</p><h1>${esc(title)}</h1>${subtitle?`<p class="muted">${esc(subtitle)}</p>`:''}</div></header>`;}
 function card(title,body,extra=''){return `<section class="card ${extra}"><h2>${title}</h2>${body}</section>`;}
@@ -110,15 +189,42 @@ async function dashboard() {
   return teacherDashboard();
 }
 async function adminDashboard(){
-  const data=await call('admin/users');
-  const users=data.users||[];
-  shell(`${heading('ADMIN','Welcome back')}<div class="grid two">${card('Quick start','<p>Approve new student and teacher accounts, reset registered devices, and maintain subjects. Check the <b>Attendance Overview</b> for cross-class activity.</p>')}
-  <div class="stats"><div class="stat"><span>Pending accounts</span><strong>${users.filter(x=>x.status==='pending').length}</strong></div><div class="stat"><span>Active accounts</span><strong>${users.filter(x=>x.status==='active').length}</strong></div></div></div>`);
+  _currentRenderPage = 'dashboard';
+  _silentUpdaters.clear();
+  // Show skeleton immediately
+  shell(`${heading('ADMIN','Welcome back')}<div class="grid two">${card('Quick start','<p>Approve new student and teacher accounts, reset registered devices, and maintain subjects. Check the <b>Attendance Overview</b> for cross-class activity.</p>')}${skeletonStats(2)}</div>`);
+  const data = await callCached('admin/users');
+  const users = data.users||[];
+  // Update stats in-place without re-rendering shell
+  const statsEl = app.querySelector('.stats');
+  if (statsEl) statsEl.outerHTML = `<div class="stats"><div class="stat"><span>Pending accounts</span><strong>${users.filter(x=>x.status==='pending').length}</strong></div><div class="stat"><span>Active accounts</span><strong>${users.filter(x=>x.status==='active').length}</strong></div></div>`;
+  // Register prefetches
+  registerPrefetch('users', () => callCached('admin/users'));
+  registerPrefetch('subjects', () => Promise.all([callCached('subjects'), callCached('registration/subjects')]));
+  registerPrefetch('overview', () => callCached('admin/attendance/overview', {query:`&month=${monthNow()}`}));
+  attachNavPrefetch();
 }
 async function studentDashboard(){
-  const [history,monthly]=await Promise.all([call('student/attendance'),call('reports/monthly',{query:`&month=${monthNow()}`})]);
+  _currentRenderPage = 'dashboard';
+  _silentUpdaters.clear();
+  // Show skeleton immediately so the page isn't blank
+  shell(`${heading('STUDENT',`Welcome, ${user.full_name}`,'Your attendance at a glance.')}${skeletonStats(3)}${card('Recent attendance',rowsTable(['SUBJECT','SESSION','STATUS','TIME'],skeletonRows(4)))}`);
+  const [history, monthly] = await Promise.all([
+    callCached('student/attendance'),
+    callCached('reports/monthly', {query:`&month=${monthNow()}`})
+  ]);
   const recent=(history.attendance||[]).slice(0,4);
-  shell(`${heading('STUDENT',`Welcome, ${user.full_name}`,'Your attendance at a glance.')}<div class="stats three"><div class="stat"><span>Classes attended this month</span><strong>${(monthly.report||[]).reduce((n,r)=>n+Number(r.attended||0),0)}</strong></div><div class="stat"><span>Subjects this term</span><strong>${(monthly.report||[]).length}</strong></div><div class="stat"><span>Attendance radius</span><strong>100 m</strong></div></div>${card('Recent attendance',rowsTable(['SUBJECT','SESSION','STATUS','TIME'],recent.map(a=>`<tr><td>${esc(a.code||'')} — ${esc(a.name||'')}</td><td>${esc(a.title||'Class attendance')}</td><td>${statusPill(a.status)}</td><td>${dateTime(a.recorded_at)}</td></tr>`)))}<div class="notice">Location is checked by the server when you submit attendance. Allow precise location access while scanning.</div>`);
+  const statsHtml = `<div class="stats three"><div class="stat"><span>Classes attended this month</span><strong>${(monthly.report||[]).reduce((n,r)=>n+Number(r.attended||0),0)}</strong></div><div class="stat"><span>Subjects this term</span><strong>${(monthly.report||[]).length}</strong></div><div class="stat"><span>Attendance radius</span><strong>100 m</strong></div></div>`;
+  const tableHtml = rowsTable(['SUBJECT','SESSION','STATUS','TIME'],recent.map(a=>`<tr><td>${esc(a.code||'')} — ${esc(a.name||'')}</td><td>${esc(a.title||'Class attendance')}</td><td>${statusPill(a.status)}</td><td>${dateTime(a.recorded_at)}</td></tr>`));
+  // Patch in real data without re-rendering the full shell
+  const skelStats = app.querySelector('.stats.three');
+  if (skelStats) skelStats.outerHTML = statsHtml;
+  const skelCard = app.querySelector('.card .table-wrap');
+  if (skelCard) skelCard.outerHTML = tableHtml;
+  // Register prefetches for student nav
+  registerPrefetch('monthly', () => callCached('reports/monthly', {query:`&month=${monthNow()}`}));
+  registerPrefetch('history', () => callCached('student/attendance'));
+  attachNavPrefetch();
 }
 async function teacherDashboard(){
   const [live]=await Promise.all([call('attendance/live')]);
