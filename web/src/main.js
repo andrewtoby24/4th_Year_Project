@@ -3,7 +3,7 @@ const QRCode = window.QRCode;
 const SUPABASE_URL = (window.EASYATTEND_SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_PUBLISHABLE_KEY = window.EASYATTEND_SUPABASE_PUBLISHABLE_KEY || '';
 const supabase = window.supabase?.createClient && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY) : null;
-const API_URL = SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/api` : '';
+const API_URL = location.hostname.endsWith('netlify.app') ? '/api' : (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/api` : '');
 const USER_KEY = 'easyattend_user';
 let user = JSON.parse(localStorage.getItem(USER_KEY) || 'null');
 let page = location.hash.slice(1) || 'dashboard';
@@ -166,12 +166,12 @@ function exportCsv(filename, headers, rows) {
 
 // ---------- Auth views ----------
 function loginView(message='') {
-  app.innerHTML=`<main class="auth-page"><section class="auth-card"><div class="brand dark">Easy<span>Attend</span><b>◉</b></div><p class="eyebrow">QR ATTENDANCE PORTAL</p><h1>Welcome back</h1><p class="muted">Sign in to continue to your attendance workspace.</p><div id="notice" class="notice error">${esc(message)}</div><form id="login-form" class="form-stack"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" id="btn-signin">Sign in</button></form><button class="text-button" data-action="show-register">Create an account</button><p class="tiny">New accounts require administrator approval.</p></section></main>`;
+  app.innerHTML=`<main class="auth-page"><section class="auth-card"><div class="brand dark">Easy<span>Attend</span><b>◉</b></div><p class="eyebrow">QR ATTENDANCE PORTAL</p><h1>Welcome back</h1><p class="muted">Sign in to continue to your attendance workspace.</p><div id="notice" class="notice error">${esc(message)}</div><form id="login-form" class="form-stack"><label>Username<input name="username" autocomplete="username" required placeholder="admin / teacher / student"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" id="btn-signin">Sign in</button></form><div style="margin-top:20px;border-top:1px solid #e2d9c7;padding-top:16px;text-align:center;"><p class="muted" style="margin-bottom:10px;font-size:13px;font-weight:600">NEW TO EASYATTEND? CREATE AN ACCOUNT:</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button type="button" class="button" data-action="register-teacher" style="padding:10px 4px;font-weight:700">👨‍🏫 Register Teacher</button><button type="button" class="button" data-action="register-student" style="padding:10px 4px;font-weight:700">🎓 Register Student</button></div></div><p class="tiny" style="margin-top:14px">Public registrations require administrator approval before sign in.</p></section></main>`;
 }
-async function registerView() {
+async function registerView(defaultRole='student') {
   try { catalog=await call('registration/subjects'); }
   catch(e){ loginView(e.message); return; }
-  app.innerHTML=`<main class="auth-page"><section class="auth-card wide"><div class="brand dark">Easy<span>Attend</span><b>◉</b></div><p class="eyebrow">GET STARTED</p><h1>Create an account</h1><div id="notice" class="notice"></div><form id="register-form" class="form-stack"><label>Full name<input name="full_name" required maxlength="120"></label><label>Username<input name="username" required minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8"></label><label>Account type<select name="role"><option value="student">Student</option><option value="teacher">Teacher</option></select></label><div id="student-fields"><label>Student roll number<input name="identifier" placeholder="4IT15"></label><div class="form-grid"><label>Academic year<select name="academic_year_id">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id"></select></label></div></div><div id="teacher-fields" hidden><p class="muted">After your account is approved, add your teaching classes and subjects under Academic assignments.</p></div><button class="button primary">Submit registration</button></form><button class="text-button" data-action="show-login">Back to sign in</button></section></main>`;
+  app.innerHTML=`<main class="auth-page"><section class="auth-card wide"><div class="brand dark">Easy<span>Attend</span><b>◉</b></div><p class="eyebrow">GET STARTED</p><h1>Create an account</h1><div id="notice" class="notice"></div><form id="register-form" class="form-stack"><label>Full name<input name="full_name" required maxlength="120" placeholder="Your full name"></label><label>Username<input name="username" required minlength="3" maxlength="50" placeholder="e.g. teacher1 or student1"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 characters"></label><label>Account type<select name="role"><option value="student" ${defaultRole==='student'?'selected':''}>Student</option><option value="teacher" ${defaultRole==='teacher'?'selected':''}>Teacher</option></select></label><div id="student-fields" ${defaultRole==='teacher'?'hidden':''}><label>Student roll number<input name="identifier" placeholder="4IT15"></label><div class="form-grid"><label>Academic year<select name="academic_year_id">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id"></select></label></div></div><div id="teacher-fields" ${defaultRole==='student'?'hidden':''}><p class="muted" style="padding:12px;background:#f3ecda;border-radius:8px"><b>Teacher account:</b> After approval, log in and assign your subjects under Academic assignments to start creating QR sessions.</p></div><button class="button primary">Submit registration</button></form><button class="text-button" data-action="show-login">Back to sign in</button></section></main>`;
   updateRegistration();
 }
 function updateRegistration() {
@@ -242,8 +242,8 @@ async function teacherDashboard(){
 // ---------- Admin pages ----------
 async function usersPage(){
   const {users=[]}=await call('admin/users');
-  const rows=users.map(u=>`<tr><td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td><td>${esc(u.role)}</td><td>${statusPill(u.status)}</td><td class="actions">${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}</td></tr>`);
-  shell(`${heading('ADMINISTRATOR','User management','Approve accounts and manage access.')}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}`);
+  const rows=users.map(u=>`<tr><td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td><td>${esc(u.role)}</td><td>${statusPill(u.status)}</td><td class="actions">${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}</td></tr>`).join('');
+  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}`);
 }
 async function subjectsPage(){
   const [list,reg]=await Promise.all([call('subjects'),call('registration/subjects')]);
@@ -385,11 +385,13 @@ app.addEventListener('click',async e=>{
   const action=b.dataset.action;
   try{
     if(action==='show-register')return registerView();
+    if(action==='register-teacher')return registerView('teacher');
+    if(action==='register-student')return registerView('student');
     if(action==='show-login')return loginView();
     if(action==='retry')return render();
     if(action==='logout'){await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
-    if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});await usersPage();return;}
-    if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});await usersPage();return;}
+    if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});invalidateCache('admin/users');await usersPage();return;}
+    if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='reset-device'){await call('admin/device/reset',{method:'POST',body:{user_id:b.dataset.id}});notice('Student device registration reset.','success');return;}
     if(action==='start-camera')return startCamera();
     if(action==='submit-scan')return submitScan();
@@ -441,6 +443,21 @@ app.addEventListener('submit',async e=>{
       try{const result=await call('login',{method:'POST',body:{device_uuid:deviceId()}});user=result.user;localStorage.setItem(USER_KEY,JSON.stringify(user));page='dashboard';location.hash='dashboard';await render();}catch(err){await supabase.auth.signOut();throw err;}
       return;
     }
+    if(form.id==='admin-create-user-form'){
+      const fd=new FormData(form);
+      notice('Creating and activating account…');
+      const res=await call('admin/create-user',{method:'POST',body:{
+        full_name:fd.get('full_name'),
+        username:fd.get('username'),
+        password:fd.get('password'),
+        role:fd.get('role'),
+        student_no:fd.get('student_no')
+      }});
+      invalidateCache('admin/users');
+      await usersPage();
+      notice(res.message||'Account created and activated!','success');
+      return;
+    }
     if(form.id==='register-form'){const fd=new FormData(form);const body={full_name:fd.get('full_name'),username:fd.get('username'),password:fd.get('password'),role:fd.get('role')};if(body.role==='student'){body.identifier=fd.get('identifier');body.academic_year_id=Number(fd.get('academic_year_id'));body.semester_id=Number(fd.get('semester_id'));}const result=await call('register',{method:'POST',body});loginView(result.message||'Registration submitted.');return;}
     if(form.id==='subject-form'){const fd=new FormData(form);await call('admin/subject',{method:'POST',body:{code:fd.get('code'),name:fd.get('name'),semester_id:Number(fd.get('semester_id'))}});await subjectsPage();notice('Subject saved.','success');return;}
     if(form.id==='assignment-form'){const fd=new FormData(form);const result=await call('teacher/assignments',{method:'POST',body:{academic_year_id:Number(fd.get('academic_year_id')),semester_id:Number(fd.get('semester_id')),class_id:Number(fd.get('class_id')),subject_ids:fd.getAll('subject_ids[]').map(Number)}});user=result.user||user;localStorage.setItem(USER_KEY,JSON.stringify(user));await assignmentPage();notice('Academic assignment saved.','success');return;}
@@ -461,6 +478,10 @@ app.addEventListener('submit',async e=>{
 
 app.addEventListener('change',e=>{
   if(e.target.matches('#register-form [name="role"],#register-form [name="academic_year_id"]'))updateRegistration();
+  if(e.target.matches('#admin-user-role')){
+    const f=document.querySelector('#admin-student-fields');
+    if(f)f.style.display=e.target.value==='student'?'grid':'none';
+  }
   if(e.target.matches('#subject-year'))updateSubjectSemesters();
   if(e.target.matches('#assignment-year,#assignment-class,#assignment-semester'))updateAssignmentOptions();
 });

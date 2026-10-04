@@ -32,23 +32,41 @@ const distanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) 
   return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+// ---------- In-memory caches to eliminate roundtrip lag ----------
+const _authCache = new Map<string, { authUser: any; profile: any; expiresAt: number }>();
+let _catalogCache: { data: any; expiresAt: number } | null = null;
+
 // ---------- Auth ----------
 async function context(request: Request) {
   const bearer = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || "";
   if (!bearer) throw new HttpError("Authentication required.", 401, "AUTH_REQUIRED");
+
+  const cached = _authCache.get(bearer);
+  const now = Date.now();
+  if (cached && now < cached.expiresAt) {
+    return { authUser: cached.authUser, profile: cached.profile };
+  }
+
   const { data, error } = await admin.auth.getUser(bearer);
   if (error || !data.user) throw new HttpError("Authentication required.", 401, "AUTH_REQUIRED");
   const profile = await one(admin.from("profiles").select("*").eq("id", data.user.id).maybeSingle());
   if (!profile) throw new HttpError("Account profile was not found.", 403, "PROFILE_MISSING");
   if (profile.status !== "active") throw new HttpError(profile.status === "pending" ? "Your account is pending administrator approval." : "Your account is disabled.", 403, "ACCOUNT_NOT_ACTIVE");
+
+  // Cache for 60 seconds in Edge memory
+  _authCache.set(bearer, { authUser: data.user, profile, expiresAt: now + 60000 });
   return { authUser: data.user, profile };
 }
 function requireRole(profile: any, role: string) {
   if (profile.role !== role) throw new HttpError("You do not have permission to do that.", 403, "FORBIDDEN");
 }
 
-// ---------- Catalog ----------
+// ---------- Catalog (cached in memory for 5 minutes) ----------
 async function catalog() {
+  const now = Date.now();
+  if (_catalogCache && now < _catalogCache.expiresAt) {
+    return _catalogCache.data;
+  }
   const [academic_years, semesters, classes, subjects] = await Promise.all([
     one(admin.from("academic_years").select("id,year_level,name").order("year_level")),
     one(admin.from("semesters").select("id,academic_year_id,semester_number,name").order("id")),
@@ -57,13 +75,15 @@ async function catalog() {
   ]);
   const semById = new Map(semesters.map((s: any) => [s.id, s]));
   const yearById = new Map(academic_years.map((y: any) => [y.id, y]));
-  return {
+  const data = {
     academic_years, semesters, classes,
     subjects: subjects.map((s: any) => {
       const sem: any = semById.get(s.semester_id); const year: any = sem ? yearById.get(sem.academic_year_id) : null;
       return { ...s, semester_number: sem?.semester_number, semester_name: sem?.name, academic_year_id: year?.id, academic_year_name: year?.name, year_level: year?.year_level };
     }),
   };
+  _catalogCache = { data, expiresAt: now + 300000 };
+  return data;
 }
 
 // ---------- Teacher assignments (cached per-call via param) ----------
@@ -199,6 +219,42 @@ async function api(request: Request) {
   if (action === "logout") return { message: "Logged out" };
 
   // ---------- Admin endpoints ----------
+  if (action === "admin/create-user") {
+    requireRole(profile, "admin");
+    const role = String(input.role || "teacher").trim().toLowerCase();
+    if (!["teacher", "student", "admin"].includes(role)) throw new HttpError("Role must be teacher, student, or admin.", 422);
+    const fullName = String(input.full_name || "").trim();
+    const username = String(input.username || "").trim().toLowerCase();
+    const password = String(input.password || "");
+    if (!(/^[a-z0-9_.-]{3,50}$/).test(username)) throw new HttpError("Username must be 3-50 alphanumeric characters.", 422);
+    if (!fullName || fullName.length > 120) throw new HttpError("Full name is required (max 120 characters).", 422);
+    if (password.length < 8) throw new HttpError("Password must be at least 8 characters.", 422);
+
+    const email = `${username}@accounts.easyattend.invalid`;
+    const existing = await one(admin.from("profiles").select("id").eq("username", username).maybeSingle());
+    if (existing) throw new HttpError(`Username "${username}" is already taken.`, 409);
+
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    if (created.error || !created.data?.user) throw new HttpError(created.error?.message || "Could not create account in auth.", 422);
+    const newUserId = created.data.user.id;
+
+    try {
+      ok(await admin.from("profiles").insert({ id: newUserId, email, username, full_name: fullName, role, status: "active" }));
+      if (role === "teacher") {
+        ok(await admin.from("teachers").insert({ user_id: newUserId }));
+      } else if (role === "student") {
+        const studentNo = String(input.student_no || "").trim().toUpperCase() || `${username.toUpperCase()}`;
+        const classId = Number(input.class_id) || 1;
+        const semesterId = Number(input.semester_id) || 11;
+        ok(await admin.from("students").insert({ user_id: newUserId, student_no: studentNo, class_id: classId, semester_id: semesterId }));
+      }
+    } catch (err) {
+      await admin.auth.admin.deleteUser(newUserId);
+      throw err;
+    }
+    return { message: `${role.toUpperCase()} account "${username}" created and activated successfully!` };
+  }
+
   if (action === "admin/users") {
     requireRole(profile, "admin");
     return { users: await one(admin.from("profiles").select("id,username,full_name,role,status,created_at").order("created_at", { ascending: false })) };
@@ -219,6 +275,7 @@ async function api(request: Request) {
   }
   if (action === "admin/subject") {
     requireRole(profile, "admin");
+    _catalogCache = null; // Invalidate cache so new subject is seen immediately
     const name = String(input.name || "").trim(), code = String(input.code || "").trim().toUpperCase(), semesterId = Number(input.semester_id);
     const sem = await one(admin.from("semesters").select("id").eq("id", semesterId).maybeSingle()); if (!sem || !name) throw new HttpError("Subject name and valid semester are required.", 422);
     if (code) { const { error } = await admin.from("subjects").upsert({ code, name, semester_id: semesterId, teacher_registration_enabled: true }, { onConflict: "semester_id,code" }); if (error) throw new HttpError(error.message, 422); } else ok(await admin.from("subjects").insert({ code: null, name, semester_id: semesterId, teacher_registration_enabled: true }));

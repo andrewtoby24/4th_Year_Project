@@ -2,7 +2,31 @@
   command = "npm run build"
   publish = "dist"
 
+# Proxy /api to Supabase Edge Function: eliminates CORS preflight OPTIONS roundtrips
+[[redirects]]
+  from = "/api/*"
+  to = "https://pizjdjhhzapsrqpxcjjt.supabase.co/functions/v1/api:splat"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Prevent stale browser caching so updates apply immediately
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/app-config.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
