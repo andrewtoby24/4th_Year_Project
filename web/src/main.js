@@ -303,12 +303,29 @@ async function historyPage(){
 }
 
 // ---------- Teacher pages ----------
+let activeSessionPollTimer = null;
+function stopActiveSessionPoll() {
+  if (activeSessionPollTimer) { clearInterval(activeSessionPollTimer); activeSessionPollTimer = null; }
+}
+async function updateLiveAttendanceCount() {
+  if (!activeSession) return;
+  try {
+    const live = await call('attendance/live');
+    const el = document.querySelector('#live-count strong');
+    if (el) el.textContent = `${(live.present_students||0) + (live.late_students||0)} / ${live.total_students||0}`;
+  } catch (_) {}
+}
 async function createPage(){
+  stopActiveSessionPoll();
   const assignments=user.subjects||[];
   const result=await call('attendance/active');
   activeSession=result.session;
   shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${card(activeSession?'Active QR token':'Start attendance',activeSession?`<div class="qr-layout"><div><span class="pill good">SESSION ACTIVE</span><h3>${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}</h3><p>${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}</p><p class="muted">Attendance radius: ${Number(activeSession.attendance_radius_meters)||100} m from the location saved when this session started.</p><canvas id="qr-canvas"></canvas><p class="token">${esc(activeSession.token)}</p><button class="button danger" data-action="end-session" id="btn-end-session">End session</button></div><div id="live-count" class="stat"><span>Students present</span><strong>—</strong></div></div>`:`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
-  if(activeSession)drawQR(activeSession.qr_payload);
+  if(activeSession){
+    drawQR(activeSession.qr_payload);
+    updateLiveAttendanceCount();
+    activeSessionPollTimer = setInterval(updateLiveAttendanceCount, 5000);
+  }
   await loadSessions();
 }
 async function drawQR(value){if(!value)return;try{const c=document.querySelector('#qr-canvas');if(c)await QRCode.toCanvas(c,value,{width:220,margin:2,color:{dark:'#12263a',light:'#fffaf0'}});}catch(e){notice(e.message,'error');}}
@@ -354,6 +371,7 @@ function updateAssignmentOptions(){
 
 // ---------- Main render ----------
 async function render(){
+  stopActiveSessionPoll();
   if(!user){loginView();return;}
   try{
     if(page==='dashboard')await dashboard();
@@ -373,13 +391,79 @@ async function render(){
 function deviceId(){let id=localStorage.getItem('easyattend_device');if(!id){id=crypto.randomUUID();localStorage.setItem('easyattend_device',id);}return id;}
 async function getQrToken(raw){const text=String(raw||'').trim().replace(/^ATTENDQR:/i,'');return text;}
 async function stopCamera(){if(scannerStream){scannerStream.getTracks().forEach(t=>t.stop());scannerStream=null;}const video=document.querySelector('#camera');if(video){video.hidden=true;video.srcObject=null;}}
-async function startCamera(){const video=document.querySelector('#camera');if(!('BarcodeDetector'in window)){notice('This browser does not support live QR scanning. Use Choose QR image or paste the token.','error');return;}try{scannerStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});video.srcObject=scannerStream;video.hidden=false;await video.play();const detector=new BarcodeDetector({formats:['qr_code']});const scan=async()=>{if(!scannerStream)return;try{const codes=await detector.detect(video);if(codes[0]){document.querySelector('#scan-token').value=await getQrToken(codes[0].rawValue);await stopCamera();notice('QR code captured. Tap Record attendance.','success');return;}}catch{}requestAnimationFrame(scan);};scan();}catch{notice('Camera permission was denied or no camera is available.','error');}}
+async function decodeQrFromBitmap(bitmap) {
+  if ('BarcodeDetector' in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const codes = await detector.detect(bitmap);
+      if (codes[0]?.rawValue) return codes[0].rawValue;
+    } catch (_) {}
+  }
+  if (window.jsQR) {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR(imgData.data, imgData.width, imgData.height);
+    if (code?.data) return code.data;
+  }
+  return null;
+}
+async function startCamera(){
+  const video=document.querySelector('#camera');
+  if(!('BarcodeDetector'in window) && !window.jsQR){
+    notice('This browser does not support live QR scanning. Use Choose QR image or paste the token.','error');
+    return;
+  }
+  try{
+    scannerStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    video.srcObject=scannerStream;
+    video.hidden=false;
+    await video.play();
+    const useNative = 'BarcodeDetector' in window;
+    const detector = useNative ? new BarcodeDetector({formats:['qr_code']}) : null;
+    const canvas = !useNative ? document.createElement('canvas') : null;
+    const ctx = canvas ? canvas.getContext('2d', { willReadFrequently: true }) : null;
+    const scan=async()=>{
+      if(!scannerStream)return;
+      try{
+        let rawVal = null;
+        if(useNative){
+          const codes=await detector.detect(video);
+          if(codes[0]) rawVal = codes[0].rawValue;
+        } else if(ctx && video.videoWidth){
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = window.jsQR(imgData.data, imgData.width, imgData.height);
+          if(code) rawVal = code.data;
+        }
+        if(rawVal){
+          document.querySelector('#scan-token').value=await getQrToken(rawVal);
+          await stopCamera();
+          notice('QR code captured. Tap Record attendance.','success');
+          return;
+        }
+      }catch(_){}
+      requestAnimationFrame(scan);
+    };
+    scan();
+  }catch{
+    notice('Camera permission was denied or no camera is available.','error');
+  }
+}
 async function submitScan(){const input=document.querySelector('#scan-token');const qr=await getQrToken(input?.value);if(!qr){notice('Scan a QR code or enter its token first.','error');return;}notice('Getting a precise location…');if(!navigator.geolocation){notice('This browser does not provide location services.','error');return;}navigator.geolocation.getCurrentPosition(async pos=>{try{const result=await call('student/scan',{method:'POST',body:{token:qr,latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}});const kind = result.status === 'late' ? 'warn' : 'success';notice(result.message||'Attendance recorded.',kind);input.value='';}catch(e){notice(e.message,'error');}},e=>notice(e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS and retry.','error'),{enableHighAccuracy:true,timeout:20000,maximumAge:0});}
 function getFreshLocation(){return new Promise((resolve,reject)=>{if(!navigator.geolocation){reject(new Error('This browser does not provide location services.'));return;}navigator.geolocation.getCurrentPosition(pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),e=>reject(new Error(e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Enable GPS and retry.')),{enableHighAccuracy:true,timeout:20000,maximumAge:0});});}
 async function sessionDetail(id){
   const d=await call('attendance/session',{query:`&session_id=${id}`});
   const rows=(d.attendance||[]).map(a=>`<tr><td>${esc(a.full_name)}</td><td>${esc(a.student_no)}</td><td>${esc(a.class_name)}</td><td>${statusPill(a.status)}</td><td>${dateTime(a.recorded_at)}</td></tr>`).join('');
   const spot=document.querySelector('#session-detail')||document.querySelector('#session-list');
+  if(!spot)return;
+  const existingBox=spot.querySelector('.detail-box');
+  if(existingBox)existingBox.remove();
   spot.insertAdjacentHTML('beforeend',`<div class="detail-box"><h3>${esc(d.session?.title||'Session')} · ${d.present_students||0} present / ${d.late_students||0} late / ${d.absent_students||0} absent</h3>${rowsTable(['STUDENT','ROLL NO.','CLASS','STATUS','TIME'],rows,'No check-ins yet.')}</div>`);
 }
 
@@ -388,12 +472,13 @@ app.addEventListener('click',async e=>{
   const b=e.target.closest('[data-action]');if(!b)return;
   const action=b.dataset.action;
   try{
+    if(action==='create'){location.hash='create';return;}
     if(action==='show-register')return registerView();
     if(action==='register-teacher')return registerView('teacher');
     if(action==='register-student')return registerView('student');
     if(action==='show-login')return loginView();
     if(action==='retry')return render();
-    if(action==='logout'){await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
+    if(action==='logout'){stopActiveSessionPoll();await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
     if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='reset-device'){await call('admin/device/reset',{method:'POST',body:{user_id:b.dataset.id}});notice('Student device registration reset.','success');return;}
@@ -490,7 +575,16 @@ app.addEventListener('change',e=>{
   if(e.target.matches('#assignment-year,#assignment-class,#assignment-semester'))updateAssignmentOptions();
 });
 app.addEventListener('change',async e=>{
-  if(e.target.id==='qr-file'){const file=e.target.files?.[0];if(!file)return;try{if(!('BarcodeDetector'in window))throw new Error('Image scanning is not supported in this browser. Enter the token manually.');const bitmap=await createImageBitmap(file);const found=await new BarcodeDetector({formats:['qr_code']}).detect(bitmap);if(!found[0])throw new Error('No QR code found in that image.');document.querySelector('#scan-token').value=await getQrToken(found[0].rawValue);notice('QR code captured. Tap Record attendance.','success');}catch(err){notice(err.message,'error');}}
+  if(e.target.id==='qr-file'){
+    const file=e.target.files?.[0];if(!file)return;
+    try{
+      const bitmap=await createImageBitmap(file);
+      const rawVal=await decodeQrFromBitmap(bitmap);
+      if(!rawVal)throw new Error('No QR code found in that image.');
+      document.querySelector('#scan-token').value=await getQrToken(rawVal);
+      notice('QR code captured. Tap Record attendance.','success');
+    }catch(err){notice(err.message,'error');}
+  }
 });
 
 window.addEventListener('hashchange',()=>{page=location.hash.slice(1)||'dashboard';render();});

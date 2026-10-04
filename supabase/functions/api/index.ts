@@ -265,6 +265,7 @@ async function api(request: Request) {
     if (!["active", "disabled"].includes(status)) throw new HttpError("Status must be active or disabled.", 422);
     const updated = await one(admin.from("profiles").update({ status }).eq("id", input.user_id).neq("role", "admin").select("id"));
     if (!updated.length) throw new HttpError("Account not found or cannot be updated.", 404);
+    _authCache.clear();
     return { message: action === "admin/verify" ? "Account approved." : `Account ${status}.` };
   }
   if (action === "admin/device/reset") {
