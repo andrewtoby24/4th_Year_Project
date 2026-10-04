@@ -282,6 +282,28 @@ async function api(request: Request) {
     if (code) { const { error } = await admin.from("subjects").upsert({ code, name, semester_id: semesterId, teacher_registration_enabled: true }, { onConflict: "semester_id,code" }); if (error) throw new HttpError(error.message, 422); } else ok(await admin.from("subjects").insert({ code: null, name, semester_id: semesterId, teacher_registration_enabled: true }));
     return { message: "Subject saved." };
   }
+  if (action === "admin/subject/update") {
+    requireRole(profile, "admin");
+    _catalogCache = null;
+    const id = Number(input.id), name = String(input.name || "").trim(), code = String(input.code || "").trim().toUpperCase() || null, semesterId = Number(input.semester_id);
+    if (!id || !name || !semesterId) throw new HttpError("Subject ID, name, and semester are required.", 422);
+    const sem = await one(admin.from("semesters").select("id").eq("id", semesterId).maybeSingle());
+    if (!sem) throw new HttpError("Valid semester is required.", 422);
+    const updated = await one(admin.from("subjects").update({ name, code, semester_id: semesterId }).eq("id", id).select("id"));
+    if (!updated.length) throw new HttpError("Subject not found.", 404);
+    return { message: "Subject updated successfully." };
+  }
+  if (action === "admin/subject/delete") {
+    requireRole(profile, "admin");
+    _catalogCache = null;
+    const id = Number(input.id);
+    if (!id) throw new HttpError("Subject ID is required.", 422);
+    const linked = await one(admin.from("teacher_subjects").select("id").eq("subject_id", id));
+    if (linked.length) throw new HttpError("This subject is assigned to teachers and cannot be deleted. Remove teacher assignments first.", 409);
+    const deleted = await one(admin.from("subjects").delete().eq("id", id).select("id"));
+    if (!deleted.length) throw new HttpError("Subject not found.", 404);
+    return { message: "Subject deleted successfully." };
+  }
   // NEW: Admin attendance overview across all classes
   if (action === "admin/attendance/overview") {
     requireRole(profile, "admin");
@@ -354,13 +376,22 @@ async function api(request: Request) {
   }
   if (action === "student/scan") {
     requireRole(profile, "student");
-    const token = String(input.token || "").trim().replace(/^ATTENDQR:/i, "");
+    const rawToken = String(input.token || "").trim().replace(/^ATTENDQR:/i, "");
+    if (!rawToken) throw new HttpError("A QR token is required.", 422, "INVALID_QR");
+    const parts = rawToken.split(":");
+    const baseToken = parts[0];
+    const scannedSlot = parts[1] ? Number(parts[1]) : null;
+    if (scannedSlot !== null && !isNaN(scannedSlot)) {
+      const currentSlot = Math.floor(Date.now() / 15000);
+      if (Math.abs(currentSlot - scannedSlot) > 1) {
+        throw new HttpError("⚠️ QR code expired! The QR code updates every 15 seconds to prevent photo sharing. Please scan the live QR code currently displayed on the teacher's screen.", 410, "QR_EXPIRED");
+      }
+    }
     const latitude = Number(input.latitude), longitude = Number(input.longitude), accuracy = Number(input.accuracy);
-    if (!token) throw new HttpError("A QR token is required.", 422, "INVALID_QR");
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || accuracy <= 0) throw new HttpError("Precise location permission is required.", 422, "LOCATION_PERMISSION_REQUIRED");
     const maxAccuracy = Number(Deno.env.get("ATTENDANCE_MAX_ACCURACY_METERS") || 100);
     if (accuracy > maxAccuracy) throw new HttpError("Your location is not accurate enough. Enable precise GPS and try again.", 422, "POOR_LOCATION_ACCURACY");
-    const hash = await tokenHash(token);
+    const hash = await tokenHash(baseToken);
     const session = await one(admin.from("attendance_sessions").select("*").eq("qr_token_hash", hash).maybeSingle());
     if (!session || !session.active) throw new HttpError("This QR session is invalid or has ended.", 410, "SESSION_ENDED");
     // FIXED: parallel fetch of assignment+term and student
@@ -373,7 +404,10 @@ async function api(request: Request) {
     if (!Number.isFinite(session.center_latitude) || !Number.isFinite(session.center_longitude)) throw new HttpError("This QR session has no saved location. End it and start a new session.", 409, "SESSION_LOCATION_REQUIRED");
     const radius = Number(session.attendance_radius_meters) || 100;
     const distance = distanceMeters(latitude, longitude, session.center_latitude, session.center_longitude);
-    if (distance > radius) throw new HttpError(`You are outside the allowed ${radius} meter attendance area.`, 403, "OUTSIDE_ALLOWED_AREA");
+    if (distance > radius) {
+      const distMeters = Math.round(distance);
+      throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${radius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA");
+    }
     // Determine late status
     const lateThresholdMinutes = Number(Deno.env.get("LATE_THRESHOLD_MINUTES") || 0);
     let attendStatus = "present";

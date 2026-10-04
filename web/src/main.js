@@ -248,8 +248,17 @@ async function usersPage(){
 async function subjectsPage(){
   const [list,reg]=await Promise.all([callCached('subjects'),callCached('registration/subjects')]);
   catalog=reg;
-  const rows=(list.subjects||[]).map(s=>`<tr><td>${esc(s.code||'—')}</td><td>${esc(s.name)}</td><td>${esc(s.academic_year_name||'')}</td><td>${esc(s.semester_name||'')}</td></tr>`).join('');
-  shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30"></label><label>Name<input name="name" required maxlength="120"></label><label>Academic year<select id="subject-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id" id="subject-sem"></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER'],rows))}`);
+  const rows=(list.subjects||[]).map(s=>`<tr>
+    <td><b>${esc(s.code||'—')}</b></td>
+    <td>${esc(s.name)}</td>
+    <td>${esc(s.academic_year_name||'')}</td>
+    <td>${esc(s.semester_name||'')}</td>
+    <td class="actions">
+      <button class="button small" data-action="edit-subject" data-id="${s.id}" data-code="${esc(s.code||'')}" data-name="${esc(s.name)}" data-year="${s.academic_year_id}" data-sem="${s.semester_id}">Edit</button>
+      <button class="button small danger" data-action="delete-subject" data-id="${s.id}">Delete</button>
+    </td>
+  </tr>`).join('');
+  shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30" placeholder="e.g. CS-401"></label><label>Name<input name="name" required maxlength="120" placeholder="e.g. Software Engineering"></label><label>Academic year<select id="subject-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id" id="subject-sem"></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],rows,'No subjects configured.'))}<div id="edit-subject-container"></div>`);
   updateSubjectSemesters();
 }
 function updateSubjectSemesters(){const y=document.querySelector('#subject-year'),s=document.querySelector('#subject-sem');if(y&&s)s.innerHTML=(catalog.semesters||[]).filter(x=>Number(x.academic_year_id)===Number(y.value)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');}
@@ -282,7 +291,7 @@ async function overviewPage(){
 }
 
 // ---------- Student pages ----------
-async function scanPage(){shell(`${heading('STUDENT','Scan QR','Attendance is accepted only during an active session and within the school radius.')}${card('Scan your teacher\'s QR code',`<p class="muted">Allow camera and precise location access. Your position must be within 100 meters of the configured attendance point.</p><div class="button-row"><button class="button" data-action="start-camera" id="btn-open-camera">Open camera</button><label class="button file-button">Choose QR image<input id="qr-file" type="file" accept="image/*" capture="environment" hidden></label></div><video id="camera" class="camera" playsinline hidden></video><label>QR token<input id="scan-token" placeholder="You can paste the token here"></label><button class="button primary full" data-action="submit-scan" id="btn-record-attendance">Record attendance</button><p class="tiny">Location and accuracy are checked again by the server. Camera scanning requires browser support; you can also enter the token from the QR.</p>`,'narrow')}`);
+async function scanPage(){shell(`${heading('STUDENT','Scan QR','Attendance is accepted only during an active session and within the school radius.')}${card('Scan your teacher\'s QR code',`<div id="scan-alert-box"></div><p class="muted">Allow camera and precise location access. Your position must be within 100 meters of the configured attendance point.</p><div class="button-row"><button class="button primary" data-action="start-camera" id="btn-open-camera">📷 Open camera</button><label class="button file-button">🖼️ Choose QR image<input id="qr-file" type="file" accept="image/*" capture="environment" hidden></label></div><video id="camera" class="camera" playsinline hidden></video><label>QR token<input id="scan-token" placeholder="You can paste the token here"></label><button class="button primary full" data-action="submit-scan" id="btn-record-attendance" style="padding:14px;font-size:16px;margin-top:14px">✅ Record Attendance</button><p class="tiny" style="margin-top:12px">Location and accuracy are checked by the server. QR codes change every 15s for security.</p>`,'narrow')}`);
 }
 async function monthlyPage(){
   const month=monthNow();
@@ -304,28 +313,96 @@ async function historyPage(){
 
 // ---------- Teacher pages ----------
 let activeSessionPollTimer = null;
+let qrTimerInterval = null;
 function stopActiveSessionPoll() {
   if (activeSessionPollTimer) { clearInterval(activeSessionPollTimer); activeSessionPollTimer = null; }
 }
+function stopQrTimer() {
+  if (qrTimerInterval) { clearInterval(qrTimerInterval); qrTimerInterval = null; }
+}
+
 async function updateLiveAttendanceCount() {
   if (!activeSession) return;
   try {
     const live = await call('attendance/live');
     const el = document.querySelector('#live-count strong');
     if (el) el.textContent = `${(live.present_students||0) + (live.late_students||0)} / ${live.total_students||0}`;
+    
+    const feedContainer = document.querySelector('#live-feed-content');
+    if (feedContainer && live.attendance) {
+      if (live.attendance.length === 0) {
+        feedContainer.innerHTML = '<p class="muted">No check-ins yet for this active session. Scanned student names will appear here live!</p>';
+      } else {
+        const rows = live.attendance.map(a => `<tr>
+          <td><b>${esc(a.full_name)}</b></td>
+          <td><small>${esc(a.student_no||'—')}</small></td>
+          <td>${statusPill(a.status)}</td>
+          <td>${dateTime(a.recorded_at)}</td>
+        </tr>`).join('');
+        feedContainer.innerHTML = rowsTable(['STUDENT NAME', 'ROLL NO', 'STATUS', 'CHECK-IN TIME'], rows);
+      }
+    }
   } catch (_) {}
 }
+
 async function createPage(){
   stopActiveSessionPoll();
+  stopQrTimer();
   const assignments=user.subjects||[];
   const result=await call('attendance/active');
   activeSession=result.session;
-  shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${card(activeSession?'Active QR token':'Start attendance',activeSession?`<div class="qr-layout"><div><span class="pill good">SESSION ACTIVE</span><h3>${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}</h3><p>${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}</p><p class="muted">Attendance radius: ${Number(activeSession.attendance_radius_meters)||100} m from the location saved when this session started.</p><canvas id="qr-canvas"></canvas><p class="token">${esc(activeSession.token)}</p><button class="button danger" data-action="end-session" id="btn-end-session">End session</button></div><div id="live-count" class="stat"><span>Students present</span><strong>—</strong></div></div>`:`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
+  shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${card(activeSession?'Active QR session':'Start attendance',activeSession?`<div class="qr-layout">
+    <div>
+      <span class="pill good">SESSION ACTIVE</span>
+      <h3>${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}</h3>
+      <p>${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}</p>
+      <p class="muted">Attendance radius: ${Number(activeSession.attendance_radius_meters)||100} m from teacher location.</p>
+      <canvas id="qr-canvas"></canvas>
+      <p class="token">${esc(activeSession.token)}</p>
+      <div class="qr-timer-box">
+        <div style="font-size:12px;font-weight:700;color:var(--navy);display:flex;justify-content:space-between;">
+          <span>🛡️ Dynamic Anti-Cheating QR</span>
+          <span>Refreshes in <b id="qr-seconds">15</b>s</span>
+        </div>
+        <div class="qr-progress-track">
+          <div id="qr-timer-bar" class="qr-progress-bar"></div>
+        </div>
+      </div>
+      <button class="button danger" data-action="end-session" id="btn-end-session" style="margin-top:10px">End session</button>
+    </div>
+    <div style="display:grid;gap:15px">
+      <div id="live-count" class="stat"><span>Students present</span><strong>—</strong></div>
+      <div class="card" style="margin:0;padding:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h4 style="margin:0">Live Check-In Feed</h4>
+          <span class="live-feed-badge"><span class="pulse-dot"></span> LIVE</span>
+        </div>
+        <div id="live-feed-content"><p class="muted">Loading student check-ins...</p></div>
+      </div>
+    </div>
+  </div>`:`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
+  
   if(activeSession){
-    const payload = activeSession.qr_payload || (activeSession.token ? `ATTENDQR:${activeSession.token}` : '');
-    drawQR(payload);
+    let currentSlot = Math.floor(Date.now() / 15000);
+    const getPayload = () => `ATTENDQR:${activeSession.token}:${currentSlot}`;
+    drawQR(getPayload());
     updateLiveAttendanceCount();
-    activeSessionPollTimer = setInterval(updateLiveAttendanceCount, 5000);
+    activeSessionPollTimer = setInterval(updateLiveAttendanceCount, 3000);
+
+    qrTimerInterval = setInterval(() => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const rem = 15 - (nowSec % 15);
+      const bar = document.querySelector('#qr-timer-bar');
+      const secEl = document.querySelector('#qr-seconds');
+      if (secEl) secEl.textContent = rem;
+      if (bar) bar.style.width = `${(rem / 15) * 100}%`;
+
+      const newSlot = Math.floor(Date.now() / 15000);
+      if (newSlot !== currentSlot) {
+        currentSlot = newSlot;
+        drawQR(getPayload());
+      }
+    }, 1000);
   }
   await loadSessions();
 }
@@ -488,7 +565,48 @@ async function startCamera(){
     notice('Camera permission was denied or no camera is available.','error');
   }
 }
-async function submitScan(){const input=document.querySelector('#scan-token');const qr=await getQrToken(input?.value);if(!qr){notice('Scan a QR code or enter its token first.','error');return;}notice('Getting a precise location…');if(!navigator.geolocation){notice('This browser does not provide location services.','error');return;}navigator.geolocation.getCurrentPosition(async pos=>{try{const result=await call('student/scan',{method:'POST',body:{token:qr,latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}});const kind = result.status === 'late' ? 'warn' : 'success';notice(result.message||'Attendance recorded.',kind);input.value='';}catch(e){notice(e.message,'error');}},e=>notice(e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS and retry.','error'),{enableHighAccuracy:true,timeout:20000,maximumAge:0});}
+async function submitScan(){
+  const alertBox=document.querySelector('#scan-alert-box');
+  if(alertBox)alertBox.innerHTML='';
+  const input=document.querySelector('#scan-token');
+  const qr=await getQrToken(input?.value);
+  if(!qr){notice('Scan a QR code or enter its token first.','error');return;}
+  notice('Getting a precise location…');
+  if(!navigator.geolocation){
+    if(alertBox)alertBox.innerHTML='<div class="geofence-alert"><h4>⚠️ Location Error</h4><p>This browser does not provide location services.</p></div>';
+    notice('This browser does not provide location services.','error');
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    try{
+      const result=await call('student/scan',{method:'POST',body:{token:qr,latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}});
+      const kind=result.status==='late'?'warn':'success';
+      notice(result.message||'Attendance recorded.',kind);
+      if(alertBox)alertBox.innerHTML=`<div class="notice success" style="display:block">✅ ${esc(result.message||'Attendance recorded successfully!')} (${Math.round(result.distance_from_classroom||0)}m from classroom point)</div>`;
+      input.value='';
+    }catch(e){
+      if(alertBox){
+        alertBox.innerHTML=`<div class="geofence-alert">
+          <h4>📍 Attendance Verification Failed</h4>
+          <p>${esc(e.message)}</p>
+          <div class="geofence-tips">
+            💡 <b>Troubleshooting Tips:</b> Move closer to the teacher's desk, ensure Wi-Fi/GPS is active for precise position, and scan the dynamic live QR code on the teacher's screen.
+          </div>
+        </div>`;
+      }
+      notice(e.message,'error');
+    }
+  },e=>{
+    const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS and retry.';
+    if(alertBox){
+      alertBox.innerHTML=`<div class="geofence-alert">
+        <h4>📍 Location Access Error</h4>
+        <p>${esc(errMsg)}</p>
+      </div>`;
+    }
+    notice(errMsg,'error');
+  },{enableHighAccuracy:true,timeout:20000,maximumAge:0});
+}
 function getFreshLocation(){return new Promise((resolve,reject)=>{if(!navigator.geolocation){reject(new Error('This browser does not provide location services.'));return;}navigator.geolocation.getCurrentPosition(pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),e=>reject(new Error(e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Enable GPS and retry.')),{enableHighAccuracy:true,timeout:20000,maximumAge:0});});}
 async function sessionDetail(id){
   const d=await call('attendance/session',{query:`&session_id=${id}`});
@@ -511,16 +629,61 @@ app.addEventListener('click',async e=>{
     if(action==='register-student')return registerView('student');
     if(action==='show-login')return loginView();
     if(action==='retry')return render();
-    if(action==='logout'){stopActiveSessionPoll();await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
+    if(action==='logout'){stopActiveSessionPoll();stopQrTimer();await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
     if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='reset-device'){await call('admin/device/reset',{method:'POST',body:{user_id:b.dataset.id}});notice('Student device registration reset.','success');return;}
     if(action==='start-camera')return startCamera();
     if(action==='submit-scan')return submitScan();
-    if(action==='end-session'){await call('attendance/end',{method:'POST',body:{session_id:activeSession?.id}});notice('QR session ended. Absent students have been marked automatically.','success');return createPage();}
+    if(action==='end-session'){await call('attendance/end',{method:'POST',body:{session_id:activeSession?.id}});stopQrTimer();notice('QR session ended. Absent students have been marked automatically.','success');return createPage();}
     if(action==='load-sessions')return loadSessions();
     if(action==='load-attendance')return loadAttendanceSessions();
     if(action==='session-detail')return sessionDetail(b.dataset.id);
+    if(action==='close-modal'){
+      const m=document.querySelector('.modal-overlay');
+      if(m)m.remove();
+      return;
+    }
+    if(action==='edit-subject'){
+      const spot=document.querySelector('#edit-subject-container');
+      if(spot){
+        spot.innerHTML=`<div class="modal-overlay" id="modal-edit-subject">
+          <div class="modal-card">
+            <h3>Edit Subject</h3>
+            <form id="edit-subject-form" class="form-stack">
+              <input type="hidden" name="id" value="${b.dataset.id}">
+              <label>Code (optional)<input name="code" value="${esc(b.dataset.code)}" maxlength="30"></label>
+              <label>Name<input name="name" value="${esc(b.dataset.name)}" required maxlength="120"></label>
+              <label>Academic year
+                <select id="edit-subject-year">
+                  ${(catalog.academic_years||[]).map(y=>`<option value="${y.id}" ${Number(y.id)===Number(b.dataset.year)?'selected':''}>${esc(y.name)}</option>`).join('')}
+                </select>
+              </label>
+              <label>Semester
+                <select name="semester_id" id="edit-subject-sem">
+                  ${(catalog.semesters||[]).filter(x=>Number(x.academic_year_id)===Number(b.dataset.year)).map(x=>`<option value="${x.id}" ${Number(x.id)===Number(b.dataset.sem)?'selected':''}>${esc(x.name)}</option>`).join('')}
+                </select>
+              </label>
+              <div style="display:flex;gap:10px;margin-top:10px">
+                <button class="button primary" style="flex:1">Save Changes</button>
+                <button type="button" class="button" data-action="close-modal">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>`;
+      }
+      return;
+    }
+    if(action==='delete-subject'){
+      if(confirm('Are you sure you want to delete this subject?')){
+        await call('admin/subject/delete',{method:'POST',body:{id:Number(b.dataset.id)}});
+        invalidateCache('subjects');
+        invalidateCache('registration/subjects');
+        await subjectsPage();
+        notice('Subject deleted successfully.','success');
+      }
+      return;
+    }
     // NEW: load overview with selected month
     if(action==='load-overview'){
       const month=document.querySelector('#overview-month')?.value||monthNow();
@@ -560,7 +723,6 @@ app.addEventListener('submit',async e=>{
       if(!supabase)throw new Error('Supabase is not configured yet.');
       const {error}=await supabase.auth.signInWithPassword({email:authAddress(fd.get('username')),password:fd.get('password')});
       if(error)throw error;
-      // Invalidate session cache after login
       _cachedSession=null;_sessionCacheTs=0;
       try{const result=await call('login',{method:'POST',body:{device_uuid:deviceId()}});user=result.user;localStorage.setItem(USER_KEY,JSON.stringify(user));page='dashboard';location.hash='dashboard';await render();}catch(err){await supabase.auth.signOut();throw err;}
       return;
@@ -581,7 +743,21 @@ app.addEventListener('submit',async e=>{
       return;
     }
     if(form.id==='register-form'){const fd=new FormData(form);const body={full_name:fd.get('full_name'),username:fd.get('username'),password:fd.get('password'),role:fd.get('role')};if(body.role==='student'){body.identifier=fd.get('identifier');body.academic_year_id=Number(fd.get('academic_year_id'));body.semester_id=Number(fd.get('semester_id'));}const result=await call('register',{method:'POST',body});loginView(result.message||'Registration submitted.');return;}
-    if(form.id==='subject-form'){const fd=new FormData(form);await call('admin/subject',{method:'POST',body:{code:fd.get('code'),name:fd.get('name'),semester_id:Number(fd.get('semester_id'))}});await subjectsPage();notice('Subject saved.','success');return;}
+    if(form.id==='subject-form'){const fd=new FormData(form);await call('admin/subject',{method:'POST',body:{code:fd.get('code'),name:fd.get('name'),semester_id:Number(fd.get('semester_id'))}});invalidateCache('subjects');invalidateCache('registration/subjects');await subjectsPage();notice('Subject saved.','success');return;}
+    if(form.id==='edit-subject-form'){
+      const fd=new FormData(form);
+      await call('admin/subject/update',{method:'POST',body:{
+        id:Number(fd.get('id')),
+        code:fd.get('code'),
+        name:fd.get('name'),
+        semester_id:Number(fd.get('semester_id'))
+      }});
+      invalidateCache('subjects');
+      invalidateCache('registration/subjects');
+      await subjectsPage();
+      notice('Subject updated successfully!','success');
+      return;
+    }
     if(form.id==='assignment-form'){const fd=new FormData(form);const result=await call('teacher/assignments',{method:'POST',body:{academic_year_id:Number(fd.get('academic_year_id')),semester_id:Number(fd.get('semester_id')),class_id:Number(fd.get('class_id')),subject_ids:fd.getAll('subject_ids[]').map(Number)}});user=result.user||user;localStorage.setItem(USER_KEY,JSON.stringify(user));await assignmentPage();notice('Academic assignment saved.','success');return;}
     if(form.id==='create-session'){const fd=new FormData(form);notice('Getting your location to set the attendance area…');const location=await getFreshLocation();if(location.accuracy>100)throw new Error('Your location is not accurate enough to start a session. Enable precise GPS and try again.');const result=await call('attendance/create',{method:'POST',body:{title:fd.get('title'),teacher_subject_id:Number(fd.get('teacher_subject_id')),...location}});activeSession=result.session||result;await createPage();notice('QR session started. The 100 m area is centered on the saved teacher location.','success');return;}
     // FIX: DOM bug — use stable wrapper container instead of replacing table-wrap node
@@ -605,6 +781,10 @@ app.addEventListener('change',e=>{
     if(f)f.style.display=e.target.value==='student'?'grid':'none';
   }
   if(e.target.matches('#subject-year'))updateSubjectSemesters();
+  if(e.target.matches('#edit-subject-year')){
+    const s=document.querySelector('#edit-subject-sem');
+    if(s&&catalog)s.innerHTML=(catalog.semesters||[]).filter(x=>Number(x.academic_year_id)===Number(e.target.value)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  }
   if(e.target.matches('#assignment-year,#assignment-class,#assignment-semester'))updateAssignmentOptions();
 });
 app.addEventListener('change',async e=>{
