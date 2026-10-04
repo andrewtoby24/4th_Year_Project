@@ -1,5 +1,14 @@
 # Supabase setup
 
+## Current EasyAttend deployment
+
+- GitHub repository: `andrewtoby24/4th_Year_Project` (`main`)
+- Netlify site: `https://easy-attend-pj.netlify.app`
+- Supabase project: `Easy_Attend_PJ_SG` (`pizjdjhhzapsrqpxcjjt`, Singapore)
+- Attendance geofence: 100 m around the West Yangon Technological University map point (`16.8686, 96.00862`)
+
+The Supabase GitHub integration is enabled for this repository with `.` as its working directory and production deploys from `main`. New migrations and the `api` Edge Function declared in `supabase/config.toml` deploy when a commit is pushed to `main`. Edge Function secrets are set in the Supabase dashboard and must not be committed.
+
 ## Create and connect a project
 
 1. Create a Supabase project and keep its database password private.
@@ -16,9 +25,9 @@
 
    ```sh
    npx supabase secrets set \
-     APP_ALLOWED_ORIGINS=https://YOUR_SITE.netlify.app \
-     ATTENDANCE_LATITUDE=YOUR_CAMPUS_LATITUDE \
-     ATTENDANCE_LONGITUDE=YOUR_CAMPUS_LONGITUDE \
+     APP_ALLOWED_ORIGINS=https://easy-attend-pj.netlify.app \
+     ATTENDANCE_LATITUDE=16.8686 \
+     ATTENDANCE_LONGITUDE=96.00862 \
      ATTENDANCE_RADIUS_METERS=100 \
      ATTENDANCE_MAX_ACCURACY_METERS=100
    ```
