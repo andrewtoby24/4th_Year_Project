@@ -6,9 +6,17 @@ td.actions .button:first-child,.actions-col .button:first-child,.actions-row .bu
 .qr-timer-box{background:#f3e8d2;border:1px solid #e2d2b5;border-radius:10px;padding:12px;margin:12px 0;text-align:center}
 .qr-progress-track{height:8px;background:#e5d6ba;border-radius:999px;overflow:hidden;margin-top:8px}
 .qr-progress-bar{height:100%;background:linear-gradient(90deg,#1c3045,#3d6d3d);width:100%;transition:width 1s linear}
-.modal-overlay{position:fixed;inset:0;background:rgba(20,32,47,0.6);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:99;padding:16px}
-.modal-card{background:#fffaf0;border:1px solid var(--line);border-radius:16px;padding:26px;width:min(100%,500px);box-shadow:0 24px 60px rgba(0,0,0,0.3);position:relative}
+select{background:#fffaf0 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23274158' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") no-repeat right 12px center;background-size:16px;padding-right:36px;appearance:none;-webkit-appearance:none;cursor:pointer}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,36,0.65);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:grid;place-items:center;z-index:9999;padding:16px;animation:fadeIn 0.18s ease-out}
+.modal-card{background:#fffaf0;border:1px solid var(--line);border-radius:18px;padding:26px;width:min(100%,540px);max-height:90vh;overflow-y:auto;box-shadow:0 24px 70px rgba(0,0,0,0.35);position:relative;animation:slideUp 0.22s ease-out}
+.modal-card.wide{width:min(100%,720px)}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
 .modal-card h3{margin-top:0;font-size:22px;color:var(--navy)}
+.profile-stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
+.profile-stat-card{background:#f6ecd7;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.profile-stat-card small{color:var(--muted);font-size:12px;display:block}
+.profile-stat-card strong{font-size:18px;color:var(--navy);font-weight:700}
 .geofence-alert{background:#fdf0ed;border:2px solid #e07267;border-radius:12px;padding:16px 18px;margin:14px 0;color:#8a2720}
 .geofence-alert h4{margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px}
 .geofence-alert p{margin:0;font-size:14px;line-height:1.5}

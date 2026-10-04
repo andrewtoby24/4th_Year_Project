@@ -245,21 +245,124 @@ function stopUsersPoll() {
   if (usersPollTimer) { clearInterval(usersPollTimer); usersPollTimer = null; }
 }
 
+async function openUserProfileModal(userId) {
+  let spot = document.querySelector('#admin-teacher-assignment-container');
+  if (!spot) {
+    spot = document.createElement('div');
+    spot.id = 'admin-teacher-assignment-container';
+    document.body.appendChild(spot);
+  }
+  notice('Loading user profile…');
+  try {
+    const data = await call('admin/user/profile', { query: `&user_id=${userId}` });
+    const p = data.profile || {};
+    const st = data.student;
+    const stats = data.attendance_stats;
+    const subs = data.teacher_subjects || [];
+
+    spot.innerHTML = `<div class="modal-overlay" id="modal-user-profile">
+      <div class="modal-card wide">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:12px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="background:var(--navy);color:#fff;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:18px;font-weight:800">
+              ${esc((p.full_name||'U').charAt(0).toUpperCase())}
+            </div>
+            <div>
+              <h3 style="margin:0;font-size:20px">${esc(p.full_name)}</h3>
+              <small class="muted">@${esc(p.username)} · ${statusPill(p.status)}</small>
+            </div>
+          </div>
+          <button class="button small" data-action="close-modal">✕ Close</button>
+        </div>
+
+        <div class="grid two" style="margin-bottom:16px">
+          <div class="card" style="margin:0;padding:16px;background:#fffaf2">
+            <h4 style="margin:0 0 10px;font-size:14px;color:var(--navy)">Account Specs</h4>
+            <p style="margin:4px 0;font-size:13px"><b>Role:</b> <span class="pill">${esc(p.role)}</span></p>
+            <p style="margin:4px 0;font-size:13px"><b>Username:</b> @${esc(p.username)}</p>
+            <p style="margin:4px 0;font-size:13px"><b>Account ID:</b> <small style="font-family:monospace">${esc(p.id.slice(0,18))}…</small></p>
+            <p style="margin:4px 0;font-size:13px"><b>Registered:</b> ${dateTime(p.created_at)}</p>
+          </div>
+
+          ${p.role === 'student' && st ? `
+            <div class="card" style="margin:0;padding:16px;background:#fffaf2">
+              <h4 style="margin:0 0 10px;font-size:14px;color:var(--navy)">Student Details</h4>
+              <p style="margin:4px 0;font-size:13px"><b>Roll No:</b> ${esc(st.student_no)}</p>
+              <p style="margin:4px 0;font-size:13px"><b>Class:</b> ${esc(st.class_name)}</p>
+              <p style="margin:4px 0;font-size:13px"><b>Semester:</b> ${esc(st.semester_name)}</p>
+              <p style="margin:4px 0;font-size:13px"><b>Device Lock:</b> ${st.device_uuid ? `<span class="pill good">Bound</span> <button class="button small" data-action="reset-device" data-id="${p.id}">Reset Device</button>` : '<span class="pill warn">Not Bound</span>'}</p>
+            </div>
+          ` : ''}
+
+          ${p.role === 'teacher' ? `
+            <div class="card" style="margin:0;padding:16px;background:#fffaf2">
+              <h4 style="margin:0 0 10px;font-size:14px;color:var(--navy)">Assigned Classes (${subs.length})</h4>
+              ${subs.length === 0 ? '<p class="muted" style="margin:0;font-size:13px">No subjects assigned.</p>' : `
+                <ul style="margin:0;padding-left:18px;font-size:13px">
+                  ${subs.map(s => `<li><b>${esc(s.class_name)}</b>: ${esc(s.code || '')} ${esc(s.name)}</li>`).join('')}
+                </ul>
+              `}
+            </div>
+          ` : ''}
+        </div>
+
+        ${stats ? `
+          <div style="background:#f6ecd7;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px">
+            <h4 style="margin:0 0 8px;font-size:14px;color:var(--navy)">Attendance Record Summary</h4>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+              <span class="pill good">Present: ${stats.present}</span>
+              <span class="pill late">Late: ${stats.late}</span>
+              <span class="pill absent">Absent: ${stats.absent}</span>
+              <span style="font-weight:700;margin-left:auto">Total: ${stats.total} sessions (${stats.percentage}%)</span>
+            </div>
+          </div>
+        ` : ''}
+
+        <div style="background:#fff3cd;border:1px solid #ffeeba;border-radius:12px;padding:16px">
+          <h4 style="margin:0 0 8px;color:#856404;display:flex;align-items:center;gap:6px">
+            🔐 Admin Password Access & Instant Reset
+          </h4>
+          <p style="margin:0 0 12px;font-size:13px;color:#856404">
+            If this user forgets their password, you can view the temporary password below or set a new password instantly.
+          </p>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+            <span style="font-weight:700;font-size:13px;color:#856404">Stored Password Hint:</span>
+            <span id="user-password-display" style="font-family:monospace;background:#fff;padding:6px 12px;border-radius:8px;border:1px solid #e0d5c1;font-weight:700;font-size:15px;color:#1c3045">
+              ${p.temp_password ? esc(p.temp_password) : '•••••••• (Set by user)'}
+            </span>
+            ${p.temp_password ? `<button type="button" class="button small" onclick="navigator.clipboard.writeText('${esc(p.temp_password)}');notice('Password copied to clipboard!','success')">📋 Copy Password</button>` : ''}
+          </div>
+
+          <form id="admin-reset-password-form" style="display:flex;gap:8px;align-items:center">
+            <input type="hidden" name="user_id" value="${p.id}">
+            <input name="new_password" placeholder="Enter new password" required minlength="6" style="flex:1;background:#fff" value="12345678">
+            <button class="button primary small" style="white-space:nowrap">Set New Password</button>
+          </form>
+        </div>
+      </div>
+    </div>`;
+  } catch(err) {
+    notice(err.message, 'error');
+  }
+}
+
 async function usersPage(){
   stopUsersPoll();
-  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('<div style="display:flex;justify-content:space-between;align-items:center"><span>Accounts</span><span class="live-feed-badge"><span class="pulse-dot"></span> LIVE SYNC</span></div>',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],skeletonRows(4)))}<div id="admin-teacher-assignment-container"></div>`);
+  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, view profiles, and reset passwords.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('<div style="display:flex;justify-content:space-between;align-items:center"><span>Accounts</span><span class="live-feed-badge"><span class="pulse-dot"></span> LIVE SYNC</span></div>',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],skeletonRows(4)))}<div id="admin-teacher-assignment-container"></div>`);
   
   const updateUsersTable = async () => {
+    if (document.hidden) return;
     try {
       const {users=[]}=await call('admin/users');
       const rows=users.map(u=>`<tr>
-        <td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td>
-        <td>${esc(u.role)}</td>
+        <td><b>${esc(u.full_name)}</b><small>@${esc(u.username)}</small></td>
+        <td><span class="pill">${esc(u.role)}</span></td>
         <td>${statusPill(u.status)}</td>
         <td class="actions">
-          ${u.role==='teacher'?`<button class="button small primary" data-action="admin-teacher-assignments" data-id="${u.id}" data-name="${esc(u.full_name)}">Reassign Subjects</button>`:''}
+          <button class="button small" data-action="view-user-profile" data-id="${u.id}">👤 Profile</button>
+          ${u.role==='teacher'?`<button class="button small primary" data-action="admin-teacher-assignments" data-id="${u.id}" data-name="${esc(u.full_name)}">Reassign</button>`:''}
           ${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}
-          ${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}
+          ${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset Device</button>`:''}
           ${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}
         </td>
       </tr>`).join('');
@@ -269,7 +372,7 @@ async function usersPage(){
   };
   
   await updateUsersTable();
-  usersPollTimer = setInterval(updateUsersTable, 4000);
+  usersPollTimer = setInterval(updateUsersTable, 6000);
 }
 async function subjectsPage(){
   shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30" placeholder="e.g. CS-401"></label><label>Name<input name="name" required maxlength="120" placeholder="e.g. Software Engineering"></label><label>Academic year<select id="subject-year"><option>Loading...</option></select></label><label>Semester<select name="semester_id" id="subject-sem"><option>Loading...</option></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],skeletonRows(4)))}<div id="edit-subject-container"></div>`);
@@ -813,6 +916,7 @@ app.addEventListener('click',async e=>{
     if(action==='show-login')return loginView();
     if(action==='retry')return render();
     if(action==='logout'){stopActiveSessionPoll();stopQrTimer();await supabase?.auth.signOut();localStorage.removeItem(USER_KEY);user=null;_cachedSession=null;return loginView();}
+    if(action==='view-user-profile')return openUserProfileModal(b.dataset.id);
     if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='reset-device'){await call('admin/device/reset',{method:'POST',body:{user_id:b.dataset.id}});notice('Student device registration reset.','success');return;}
@@ -944,6 +1048,17 @@ app.addEventListener('submit',async e=>{
       if(error)throw error;
       _cachedSession=null;_sessionCacheTs=0;
       try{const result=await call('login',{method:'POST',body:{device_uuid:deviceId()}});user=result.user;localStorage.setItem(USER_KEY,JSON.stringify(user));page='dashboard';location.hash='dashboard';await render();}catch(err){await supabase.auth.signOut();throw err;}
+      return;
+    }
+    if(form.id==='admin-reset-password-form'){
+      const fd=new FormData(form);
+      const userId=fd.get('user_id');
+      const newPassword=fd.get('new_password');
+      notice('Updating user password…');
+      const res=await call('admin/user/reset-password',{method:'POST',body:{user_id:userId,new_password:newPassword}});
+      const display=document.querySelector('#user-password-display');
+      if(display) display.textContent=newPassword;
+      notice(res.message||'Password updated successfully!','success');
       return;
     }
     if(form.id==='admin-create-user-form'){

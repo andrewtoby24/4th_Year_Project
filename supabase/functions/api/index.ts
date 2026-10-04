@@ -234,12 +234,16 @@ async function api(request: Request) {
     const existing = await one(admin.from("profiles").select("id").eq("username", username).maybeSingle());
     if (existing) throw new HttpError(`Username "${username}" is already taken.`, 409);
 
-    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { temp_password: password } });
     if (created.error || !created.data?.user) throw new HttpError(created.error?.message || "Could not create account in auth.", 422);
     const newUserId = created.data.user.id;
 
     try {
-      ok(await admin.from("profiles").insert({ id: newUserId, email, username, full_name: fullName, role, status: "active" }));
+      try {
+        ok(await admin.from("profiles").insert({ id: newUserId, email, username, full_name: fullName, role, status: "active", temp_password: password }));
+      } catch (_) {
+        ok(await admin.from("profiles").insert({ id: newUserId, email, username, full_name: fullName, role, status: "active" }));
+      }
       if (role === "teacher") {
         ok(await admin.from("teachers").insert({ user_id: newUserId }));
       } else if (role === "student") {
@@ -258,6 +262,89 @@ async function api(request: Request) {
   if (action === "admin/users") {
     requireRole(profile, "admin");
     return { users: await one(admin.from("profiles").select("id,username,full_name,role,status,created_at").order("created_at", { ascending: false })) };
+  }
+  if (action === "admin/user/profile") {
+    requireRole(profile, "admin");
+    const targetUserId = String(input.user_id || query.get("user_id") || "");
+    if (!targetUserId) throw new HttpError("User ID is required.", 422);
+
+    const targetProfile = await one(admin.from("profiles").select("*").eq("id", targetUserId).maybeSingle());
+    if (!targetProfile) throw new HttpError("User profile not found.", 404);
+
+    let tempPassword = targetProfile.temp_password || null;
+    try {
+      const authUser = await admin.auth.admin.getUserById(targetUserId);
+      if (authUser?.data?.user?.user_metadata?.temp_password) {
+        tempPassword = authUser.data.user.user_metadata.temp_password;
+      }
+    } catch (_) {}
+
+    let studentInfo = null;
+    let teacherSubjects = [];
+    let attendanceStats = null;
+
+    if (targetProfile.role === "student") {
+      const st = await one(admin.from("students").select("id,student_no,device_uuid,class_id,semester_id").eq("user_id", targetUserId).maybeSingle());
+      if (st) {
+        const [cls, sem, attRecords] = await Promise.all([
+          st.class_id ? one(admin.from("classes").select("name,academic_year_id").eq("id", st.class_id).maybeSingle()) : null,
+          st.semester_id ? one(admin.from("semesters").select("name,academic_year_id").eq("id", st.semester_id).maybeSingle()) : null,
+          one(admin.from("attendance").select("status").eq("student_id", targetUserId))
+        ]);
+        let yearName = "";
+        if (cls?.academic_year_id) {
+          const yr = await one(admin.from("academic_years").select("name").eq("id", cls.academic_year_id).maybeSingle());
+          if (yr) yearName = yr.name;
+        }
+        studentInfo = {
+          student_no: st.student_no,
+          device_uuid: st.device_uuid,
+          class_name: cls?.name || "Unassigned",
+          semester_name: sem?.name || "Unassigned",
+          academic_year_name: yearName
+        };
+        const total = attRecords.length;
+        const present = attRecords.filter((a: any) => a.status === "present").length;
+        const late = attRecords.filter((a: any) => a.status === "late").length;
+        const absent = attRecords.filter((a: any) => a.status === "absent").length;
+        attendanceStats = { total, present, late, absent, percentage: total ? Math.round(((present + late) / total) * 100) : 0 };
+      }
+    } else if (targetProfile.role === "teacher") {
+      teacherSubjects = await assignmentsFor(targetUserId);
+    }
+
+    return {
+      profile: { ...targetProfile, temp_password: tempPassword },
+      student: studentInfo,
+      teacher_subjects: teacherSubjects,
+      attendance_stats: attendanceStats
+    };
+  }
+  if (action === "admin/user/reset-password") {
+    requireRole(profile, "admin");
+    const targetUserId = String(input.user_id || "");
+    const newPassword = String(input.new_password || "").trim();
+    if (!targetUserId) throw new HttpError("User ID is required.", 422);
+    if (!newPassword || newPassword.length < 6) throw new HttpError("Password must be at least 6 characters long.", 422);
+
+    const targetProfile = await one(admin.from("profiles").select("id,username,full_name").eq("id", targetUserId).maybeSingle());
+    if (!targetProfile) throw new HttpError("User profile not found.", 404);
+
+    const { error } = await admin.auth.admin.updateUserById(targetUserId, {
+      password: newPassword,
+      user_metadata: { temp_password: newPassword }
+    });
+    if (error) throw new HttpError(`Auth update failed: ${error.message}`, 400);
+
+    try {
+      await admin.from("profiles").update({ temp_password: newPassword }).eq("id", targetUserId);
+    } catch (_) {}
+
+    _authCache.clear();
+    return {
+      message: `Password for "${targetProfile.full_name}" (@${targetProfile.username}) has been updated to "${newPassword}".`,
+      new_password: newPassword
+    };
   }
   if (action === "admin/verify" || action === "admin/status") {
     requireRole(profile, "admin");
