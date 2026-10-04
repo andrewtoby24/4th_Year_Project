@@ -558,8 +558,8 @@ async function api(request: Request) {
 
 Deno.serve(async (request: Request) => {
   const requestOrigin = request.headers.get("Origin") || "";
-  const allowed = allowedOrigins.includes("*") || allowedOrigins.includes(requestOrigin);
-  const origin = allowed ? requestOrigin : "";
+  const allowed = allowedOrigins.includes("*") || !requestOrigin || allowedOrigins.includes(requestOrigin);
+  const origin = allowed ? (requestOrigin || "*") : "";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": origin || "*", "Access-Control-Allow-Headers": "authorization, apikey, content-type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Vary": "Origin" } });
   if (!allowed) return json({ message: "Origin not allowed." }, 403, "");
   try { return json(await api(request), 200, origin); } catch (error) { const err = error instanceof HttpError ? error : new HttpError(error instanceof Error ? error.message : "Unexpected server error.", 500, "SERVER_ERROR"); return json({ code: err.code, message: err.message }, err.status, origin); }
