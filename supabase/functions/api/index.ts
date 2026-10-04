@@ -121,7 +121,7 @@ async function sessionView(session: any, includeToken = false) {
     one(admin.from("semesters").select("id,name,semester_number,academic_year_id").eq("id",term.semester_id).single()),
   ]);
   const year=await one(admin.from("academic_years").select("id,name,year_level").eq("id",sem.academic_year_id).single());
-  const view:any={id:session.id,session_id:session.id,title:session.title,year_level:year.year_level,class_id:cls.id,class_name:cls.name,teacher_subject_id:link.id,starts_at:session.starts_at,ended_at:session.ended_at,ends_at:session.ended_at,status:session.active?"ACTIVE":"ENDED",active:session.active,subject,academic_year:{id:year.id,year_level:year.year_level,name:year.name},semester:{id:sem.id,number:sem.semester_number,name:sem.name}};
+  const view:any={id:session.id,session_id:session.id,title:session.title,year_level:year.year_level,class_id:cls.id,class_name:cls.name,teacher_subject_id:link.id,starts_at:session.starts_at,ended_at:session.ended_at,ends_at:session.ended_at,status:session.active?"ACTIVE":"ENDED",active:session.active,attendance_radius_meters:session.attendance_radius_meters,center_accuracy:session.center_accuracy,subject,academic_year:{id:year.id,year_level:year.year_level,name:year.name},semester:{id:sem.id,number:sem.semester_number,name:sem.name}};
   if(includeToken&&session.active&&session.qr_display_token){view.token=session.qr_display_token;view.qr_payload=`ATTENDQR:${session.qr_display_token}`;}
   return view;
 }
@@ -207,14 +207,14 @@ async function api(request: Request) {
     requireRole(profile,'student');const token=String(input.token||'').trim().replace(/^ATTENDQR:/i,'');const latitude=Number(input.latitude),longitude=Number(input.longitude),accuracy=Number(input.accuracy);
     if(!token)throw new HttpError('A QR token is required.',422,'INVALID_QR');
     if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||!Number.isFinite(accuracy)||latitude < -90||latitude>90||longitude < -180||longitude>180||accuracy<=0)throw new HttpError('Precise location permission is required.',422,'LOCATION_PERMISSION_REQUIRED');
-    const maxAccuracy=Number(Deno.env.get('ATTENDANCE_MAX_ACCURACY_METERS')||100),radius=Number(Deno.env.get('ATTENDANCE_RADIUS_METERS')||100);
+    const maxAccuracy=Number(Deno.env.get('ATTENDANCE_MAX_ACCURACY_METERS')||100);
     if(accuracy>maxAccuracy)throw new HttpError('Your location is not accurate enough. Enable precise GPS and try again.',422,'POOR_LOCATION_ACCURACY');
     const hash=await tokenHash(token);const session=await one(admin.from('attendance_sessions').select('*').eq('qr_token_hash',hash).maybeSingle());if(!session||!session.active)throw new HttpError('This QR session is invalid or has ended.',410,'SESSION_ENDED');
     const assignment=await one(admin.from('teacher_subjects').select('id,subject_id,teacher_term_id').eq('id',session.teacher_subject_id).single());const term=await one(admin.from('teacher_terms').select('semester_id,class_id').eq('id',assignment.teacher_term_id).single());
     const student=await one(admin.from('students').select('id,class_id,semester_id').eq('user_id',profile.id).single());if(student.class_id!==term.class_id||student.semester_id!==term.semester_id)throw new HttpError('This attendance session is for a different class or semester.',403,'WRONG_CLASS');
-    const classLocation={latitude:Number(Deno.env.get('ATTENDANCE_LATITUDE')),longitude:Number(Deno.env.get('ATTENDANCE_LONGITUDE'))};
-    if(!Number.isFinite(classLocation.latitude)||!Number.isFinite(classLocation.longitude))throw new HttpError('Campus coordinates have not been configured.',503,'LOCATION_NOT_CONFIGURED');
-    const distance=distanceMeters(latitude,longitude,classLocation.latitude,classLocation.longitude);if(distance>radius)throw new HttpError(`You are outside the allowed ${radius} meter attendance area.`,403,'OUTSIDE_ALLOWED_AREA');
+    if(!Number.isFinite(session.center_latitude)||!Number.isFinite(session.center_longitude))throw new HttpError('This QR session has no saved location. End it and start a new session.',409,'SESSION_LOCATION_REQUIRED');
+    const radius=Number(session.attendance_radius_meters)||100;
+    const distance=distanceMeters(latitude,longitude,session.center_latitude,session.center_longitude);if(distance>radius)throw new HttpError(`You are outside the allowed ${radius} meter attendance area.`,403,'OUTSIDE_ALLOWED_AREA');
     const inserted=await admin.from('attendance').insert({session_id:session.id,student_id:student.id,status:'present',latitude,longitude,accuracy,distance_from_classroom:distance}).select('id');
     if(inserted.error?.code==='23505')throw new HttpError('Attendance has already been recorded.',409,'DUPLICATE_ATTENDANCE');if(inserted.error?.code==='P0001')throw new HttpError('This QR attendance session has ended.',410,'SESSION_ENDED');if(inserted.error)throw new HttpError(inserted.error.message,400);
     return {code:'SUCCESS',message:'Attendance recorded successfully.',distance_from_classroom:distance,allowed_radius:radius};
@@ -233,9 +233,13 @@ async function api(request: Request) {
   }
   if(action==='attendance/create'){
     requireRole(profile,'teacher');const assignmentId=Number(input.teacher_subject_id),title=String(input.title||'').trim();if(!title||title.length>150)throw new HttpError('Enter a session title.',422);
+    const centerLatitude=Number(input.latitude),centerLongitude=Number(input.longitude),centerAccuracy=Number(input.accuracy);
+    if(!Number.isFinite(centerLatitude)||centerLatitude < -90||centerLatitude>90||!Number.isFinite(centerLongitude)||centerLongitude < -180||centerLongitude>180||!Number.isFinite(centerAccuracy)||centerAccuracy<=0)throw new HttpError('Precise location permission is required to start a QR session.',422,'LOCATION_PERMISSION_REQUIRED');
+    const maxAccuracy=Number(Deno.env.get('ATTENDANCE_MAX_ACCURACY_METERS')||100);if(centerAccuracy>maxAccuracy)throw new HttpError('Your location is not accurate enough to start a session. Enable precise GPS and try again.',422,'POOR_LOCATION_ACCURACY');
+    const radius=Number(Deno.env.get('ATTENDANCE_RADIUS_METERS')||100);if(!Number.isInteger(radius)||radius<1||radius>5000)throw new HttpError('The attendance radius is not configured correctly.',503,'INVALID_ATTENDANCE_RADIUS');
     await ownedAssignment(profile.id,assignmentId);
     const token=Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b=>b.toString(16).padStart(2,'0')).join('');const hash=await tokenHash(token);
-    const created=await admin.from('attendance_sessions').insert({teacher_id:profile.id,teacher_subject_id:assignmentId,title,qr_token_hash:hash,qr_display_token:token,active:true}).select('*').single();
+    const created=await admin.from('attendance_sessions').insert({teacher_id:profile.id,teacher_subject_id:assignmentId,title,qr_token_hash:hash,qr_display_token:token,center_latitude:centerLatitude,center_longitude:centerLongitude,center_accuracy:centerAccuracy,attendance_radius_meters:radius,active:true}).select('*').single();
     if(created.error?.code==='23505')throw new HttpError('You already have an active QR session. End it before starting another.',409,'ACTIVE_SESSION_EXISTS');if(created.error)throw new HttpError(created.error.message,400);
     const session=await sessionView(created.data,true);return {session,message:'Attendance session created.'};
   }

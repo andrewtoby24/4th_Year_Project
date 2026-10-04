@@ -20,7 +20,7 @@ Netlify build settings:
 - `VITE_SUPABASE_URL`: Supabase Project URL
 - `VITE_SUPABASE_PUBLISHABLE_KEY`: Supabase publishable key
 
-Never put the Supabase secret key in frontend configuration. Configure the actual campus coordinates in the Edge Function secrets before using location checks.
+Never put the Supabase secret key in frontend configuration. At the start of each QR session, the teacher's device location is saved as that session's geofence center; `ATTENDANCE_RADIUS_METERS` controls the allowed distance (100 m by default). The Edge Function validates location and accuracy on both session creation and student check-in.
 
 ## Local frontend development
 

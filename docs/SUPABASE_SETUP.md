@@ -5,7 +5,7 @@
 - GitHub repository: `andrewtoby24/4th_Year_Project` (`main`)
 - Netlify site: `https://easy-attend-pj.netlify.app`
 - Supabase project: `Easy_Attend_PJ_SG` (`pizjdjhhzapsrqpxcjjt`, Singapore)
-- Attendance geofence: 100 m around the West Yangon Technological University map point (`16.8686, 96.00862`)
+- Attendance geofence: 100 m around the teacher device's fresh location when each QR session starts
 
 The Supabase GitHub integration is enabled for this repository with `.` as its working directory and production deploys from `main`. New migrations and the `api` Edge Function declared in `supabase/config.toml` deploy when a commit is pushed to `main`. Edge Function secrets are set in the Supabase dashboard and must not be committed.
 
@@ -26,8 +26,6 @@ The Supabase GitHub integration is enabled for this repository with `.` as its w
    ```sh
    npx supabase secrets set \
      APP_ALLOWED_ORIGINS=https://easy-attend-pj.netlify.app \
-     ATTENDANCE_LATITUDE=16.8686 \
-     ATTENDANCE_LONGITUDE=96.00862 \
      ATTENDANCE_RADIUS_METERS=100 \
      ATTENDANCE_MAX_ACCURACY_METERS=100
    ```
@@ -62,4 +60,4 @@ After Netlify assigns a site URL, make sure that exact origin is in the Supabase
 
 Set `window.EASYATTEND_SUPABASE_URL` and `window.EASYATTEND_SUPABASE_PUBLISHABLE_KEY` in `web/app-config.js`, then run `npm run dev`. The Edge Function's allowed origins must include `http://localhost:5173` during local development.
 
-Use the real campus map coordinates. The 100 m distance and location-accuracy limit are checked by the Edge Function, not trusted from the browser. Camera and GPS access require HTTPS in production.
+When a teacher starts a QR session, the app asks for a fresh, precise location and saves it as that session's attendance center. Students are checked against that saved center and the configured radius. The Edge Function validates the supplied coordinates and accuracy; as with browser geolocation generally, device locations can be inaccurate or spoofed. Camera and GPS access require HTTPS in production.
