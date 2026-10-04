@@ -1,0 +1,1 @@
+window.EASYATTEND_API_BASE_URL = "";

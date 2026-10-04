@@ -4,9 +4,15 @@ declare(strict_types=1);
 session_start();
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
-header("Access-Control-Allow-Origin: {$origin}");
-header('Vary: Origin'); header('Access-Control-Allow-Credentials: true');
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+$allowedOrigins = array_filter(array_map('trim', explode(',', getenv('APP_ALLOWED_ORIGINS') ?: 'http://localhost:5173,http://127.0.0.1:5173')));
+if ($origin !== '' && in_array($origin, $allowedOrigins, true)) {
+    header("Access-Control-Allow-Origin: {$origin}");
+    header('Vary: Origin');
+} elseif ($origin !== '') {
+    http_response_code(403);
+    exit;
+}
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
@@ -21,7 +27,7 @@ use App\Helpers\ApiResponse;
 
 try {
     $config = require dirname(__DIR__) . '/config/database.php';
-    $pdo = new PDO("mysql:host={$config['host']};dbname={$config['database']};charset={$config['charset']}", $config['username'], $config['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    $pdo = new PDO("mysql:host={$config['host']};port={$config['port']};dbname={$config['database']};charset={$config['charset']}", $config['username'], $config['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
     $body = json_decode(file_get_contents('php://input'), true); $body = is_array($body) ? $body : ($_SERVER['REQUEST_METHOD'] === 'GET' ? $_GET : $_POST);
     $action = (string)($_GET['action'] ?? 'health');
     $controllers = ['auth' => new AuthController($pdo, $body), 'student' => new StudentController($pdo, $body), 'teacher' => new TeacherController($pdo, $body), 'attendance' => new AttendanceController($pdo, $body), 'report' => new ReportController($pdo, $body), 'admin' => new AdminController($pdo, $body)];
