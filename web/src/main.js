@@ -748,46 +748,42 @@ async function submitScan(){
   const input=document.querySelector('#scan-token');
   const qr=await getQrToken(input?.value);
   if(!qr){notice('Scan a QR code or enter its token first.','error');return;}
-  notice('Getting a precise location…');
-  if(!navigator.geolocation){
-    const errMsg = 'This browser does not provide location services.';
-    if(alertBox)alertBox.innerHTML=`<div class="geofence-alert"><h4>⚠️ Location Error</h4><p>${esc(errMsg)}</p></div>`;
-    showLocationHelpModal(errMsg);
-    notice(errMsg,'error');
-    return;
-  }
-  navigator.geolocation.getCurrentPosition(async pos=>{
-    try{
-      const result=await call('student/scan',{method:'POST',body:{token:qr,latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}});
-      const kind=result.status==='late'?'warn':'success';
-      notice(result.message||'Attendance recorded.',kind);
-      if(alertBox)alertBox.innerHTML=`<div class="notice success" style="display:block">✅ ${esc(result.message||'Attendance recorded successfully!')} (${Math.round(result.distance_from_classroom||0)}m from classroom point)</div>`;
-      input.value='';
-    }catch(e){
-      const distance = e.distance_from_classroom || e.distance;
-      showOutOfRadiusModal(e.message || 'Verification failed. You are outside the 100m attendance radius.', distance);
-      if(alertBox){
-        alertBox.innerHTML=`<div class="geofence-alert">
-          <h4>📍 Attendance Verification Failed</h4>
-          <p>${esc(e.message)}</p>
-          <div class="geofence-tips">
-            💡 <b>Troubleshooting Tips:</b> Move closer to the teacher's desk, ensure Wi-Fi/GPS is active for precise position, and scan the dynamic live QR code on the teacher's screen.
-          </div>
-        </div>`;
-      }
-      notice(e.message,'error');
-    }
-  },e=>{
-    const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS/Wi-Fi location and retry.';
-    showLocationHelpModal(errMsg);
+  notice('Getting location to verify attendance…');
+  
+  let pos;
+  try {
+    pos = await getFreshLocation();
+  } catch(err) {
     if(alertBox){
       alertBox.innerHTML=`<div class="geofence-alert">
         <h4>📍 Location Access Error</h4>
-        <p>${esc(errMsg)}</p>
+        <p>${esc(err.message)}</p>
       </div>`;
     }
-    notice(errMsg,'error');
-  },{enableHighAccuracy:true,timeout:12000,maximumAge:10000});
+    notice(err.message,'error');
+    return;
+  }
+
+  try{
+    const result=await call('student/scan',{method:'POST',body:{token:qr,latitude:pos.latitude,longitude:pos.longitude,accuracy:pos.accuracy}});
+    const kind=result.status==='late'?'warn':'success';
+    notice(result.message||'Attendance recorded.',kind);
+    if(alertBox)alertBox.innerHTML=`<div class="notice success" style="display:block">✅ ${esc(result.message||'Attendance recorded successfully!')} (${Math.round(result.distance_from_classroom||0)}m from classroom point)</div>`;
+    input.value='';
+  }catch(e){
+    const distance = e.distance_from_classroom || e.distance;
+    showOutOfRadiusModal(e.message || 'Verification failed. You are outside the 100m attendance radius.', distance);
+    if(alertBox){
+      alertBox.innerHTML=`<div class="geofence-alert">
+        <h4>📍 Attendance Verification Failed</h4>
+        <p>${esc(e.message)}</p>
+        <div class="geofence-tips">
+          💡 <b>Troubleshooting Tips:</b> Move closer to the teacher's desk, ensure Wi-Fi/GPS is active for precise position, and scan the dynamic live QR code on the teacher's screen.
+        </div>
+      </div>`;
+    }
+    notice(e.message,'error');
+  }
 }
 
 function showOutOfRadiusModal(message, distance) {

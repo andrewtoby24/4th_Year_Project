@@ -476,7 +476,7 @@ async function api(request: Request) {
     }
     const latitude = Number(input.latitude), longitude = Number(input.longitude), accuracy = Number(input.accuracy);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || accuracy <= 0) throw new HttpError("Precise location permission is required.", 422, "LOCATION_PERMISSION_REQUIRED");
-    const maxAccuracy = Number(Deno.env.get("ATTENDANCE_MAX_ACCURACY_METERS") || 100);
+    const maxAccuracy = Number(Deno.env.get("ATTENDANCE_MAX_ACCURACY_METERS") || 300);
     if (accuracy > maxAccuracy) throw new HttpError("Your location is not accurate enough. Enable precise GPS and try again.", 422, "POOR_LOCATION_ACCURACY");
     const hash = await tokenHash(baseToken);
     const session = await one(admin.from("attendance_sessions").select("*").eq("qr_token_hash", hash).maybeSingle());
@@ -606,7 +606,7 @@ async function api(request: Request) {
     if (!title || title.length > 150) throw new HttpError("Enter a session title.", 422);
     const centerLatitude = Number(input.latitude), centerLongitude = Number(input.longitude), centerAccuracy = Number(input.accuracy);
     if (!Number.isFinite(centerLatitude) || centerLatitude < -90 || centerLatitude > 90 || !Number.isFinite(centerLongitude) || centerLongitude < -180 || centerLongitude > 180 || !Number.isFinite(centerAccuracy) || centerAccuracy <= 0) throw new HttpError("Precise location permission is required to start a QR session.", 422, "LOCATION_PERMISSION_REQUIRED");
-    const maxAccuracy = Number(Deno.env.get("ATTENDANCE_MAX_ACCURACY_METERS") || 100);
+    const maxAccuracy = Number(Deno.env.get("ATTENDANCE_MAX_ACCURACY_METERS") || 300);
     if (centerAccuracy > maxAccuracy) throw new HttpError("Your location is not accurate enough to start a session. Enable precise GPS and try again.", 422, "POOR_LOCATION_ACCURACY");
     const radius = Number(Deno.env.get("ATTENDANCE_RADIUS_METERS") || 100);
     if (!Number.isInteger(radius) || radius < 1 || radius > 5000) throw new HttpError("The attendance radius is not configured correctly.", 503, "INVALID_ATTENDANCE_RADIUS");
