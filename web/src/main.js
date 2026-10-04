@@ -506,16 +506,26 @@ async function createPage(){
   const assignments=user.subjects||[];
   const result=await call('attendance/active');
   activeSession=result.session;
-  shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${card(activeSession?'Active QR session':'Start attendance',activeSession?`<div class="qr-layout">
-    <div>
-      <span class="pill good">SESSION ACTIVE</span>
-      <h3>${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}</h3>
-      <p>${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}</p>
-      <p class="muted">Attendance radius: ${Number(activeSession.attendance_radius_meters)||100} m from teacher location.</p>
-      <canvas id="qr-canvas"></canvas>
-      <p class="token">${esc(activeSession.token)}</p>
+  shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${activeSession?`<div class="grid two" style="align-items:start;margin-bottom:24px">
+    <div class="card" style="margin:0;text-align:center">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span class="pill good">SESSION ACTIVE</span>
+        <small class="muted">${Number(activeSession.attendance_radius_meters)||100}m Radius</small>
+      </div>
+      <h3 style="margin:0 0 6px;font-size:22px;color:var(--navy)">
+        ${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}
+      </h3>
+      <p style="margin:0 0 14px;color:var(--muted);font-size:14px">
+        ${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}
+      </p>
+      
+      <div style="background:#fff;padding:16px;border-radius:16px;border:1px solid var(--line);display:inline-block;margin:0 auto">
+        <canvas id="qr-canvas"></canvas>
+      </div>
+      <p class="token" style="margin-top:10px">${esc(activeSession.token)}</p>
+
       <div class="qr-timer-box">
-        <div style="font-size:12px;font-weight:700;color:var(--navy);display:flex;justify-content:space-between;">
+        <div style="font-size:12px;font-weight:700;color:var(--navy);display:flex;justify-content:space-between">
           <span>🛡️ Dynamic Anti-Cheating QR</span>
           <span>Refreshes in <b id="qr-seconds">15</b>s</span>
         </div>
@@ -523,19 +533,27 @@ async function createPage(){
           <div id="qr-timer-bar" class="qr-progress-bar"></div>
         </div>
       </div>
-      <button class="button danger" data-action="end-session" id="btn-end-session" style="margin-top:10px">End session</button>
+      
+      <button class="button danger full" data-action="end-session" id="btn-end-session" style="margin-top:14px">End QR Session</button>
     </div>
-    <div style="display:grid;gap:15px">
-      <div id="live-count" class="stat"><span>Students present</span><strong>—</strong></div>
-      <div class="card" style="margin:0;padding:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <h4 style="margin:0">Live Check-In Feed</h4>
-          <span class="live-feed-badge"><span class="pulse-dot"></span> LIVE</span>
+
+    <div style="display:grid;gap:16px">
+      <div id="live-count" class="stat" style="background:#f6ecd7;padding:18px;border-radius:14px;border:1px solid var(--line)">
+        <span style="font-weight:700;color:var(--navy);font-size:14px">Students Present / Enrolled</span>
+        <strong style="font-size:32px;color:#3d6d3d;margin-top:4px">—</strong>
+      </div>
+
+      <div class="card" style="margin:0;padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h4 style="margin:0;font-size:16px">Live Student Check-In Feed</h4>
+          <span class="live-feed-badge"><span class="pulse-dot"></span> LIVE SYNC</span>
         </div>
-        <div id="live-feed-content"><p class="muted">Loading student check-ins...</p></div>
+        <div id="live-feed-content" style="overflow-x:auto">
+          <p class="muted">Loading student check-ins...</p>
+        </div>
       </div>
     </div>
-  </div>`:`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
+  </div>`:`${card('Start attendance',`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}`}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
   
   if(activeSession){
     let currentSlot = Math.floor(Date.now() / 15000);

@@ -680,19 +680,29 @@ async function api(request: Request) {
       one(admin.from("attendance").select("student_id,status,recorded_at").eq("session_id", session.id).order("recorded_at", { ascending: false })),
     ]);
     const term = linkRow.term;
-    const [students, sessionViewData] = await Promise.all([
-      one(admin.from("students").select("id,user_id,student_no").eq("class_id", term.class_id).eq("semester_id", term.semester_id)),
+    const [classStudents, sessionViewData] = await Promise.all([
+      one(admin.from("students").select("id,user_id,student_no").eq("class_id", term.class_id)),
       sessionView(session, session.active),
     ]);
-    const userIds = students.map((s: any) => s.user_id);
+
+    const scannedStudentIds = [...new Set(allAttendance.map((a: any) => a.student_id))];
+    const extraStudents = scannedStudentIds.length ? await one(admin.from("students").select("id,user_id,student_no").in("id", scannedStudentIds)) : [];
+    
+    const allStudentsMap = new Map();
+    [...classStudents, ...extraStudents].forEach((s: any) => allStudentsMap.set(s.id, s));
+    const allStudents = Array.from(allStudentsMap.values());
+
+    const userIds = allStudents.map((s: any) => s.user_id);
     const profiles = userIds.length ? await one(admin.from("profiles").select("id,full_name,status").in("id", userIds)) : [];
     const profileMap = new Map(profiles.map((p: any) => [p.id, p]));
-    const activeStudents = students.filter((s: any) => profileMap.get(s.user_id)?.status === "active");
-    const visible = action === "attendance/live" && session.active ? allAttendance.slice(0, 5) : allAttendance;
+    const activeStudents = allStudents.filter((s: any) => profileMap.get(s.user_id)?.status === "active");
+
+    const visible = action === "attendance/live" && session.active ? allAttendance.slice(0, 10) : allAttendance;
     const className = term.class?.name || "";
     const rows = visible.map((a: any) => {
-      const st = students.find((x: any) => x.id === a.student_id), p = st && profileMap.get(st.user_id);
-      return { full_name: p?.full_name || "", student_no: st?.student_no, class_name: className, status: a.status, recorded_at: a.recorded_at };
+      const st = allStudentsMap.get(a.student_id);
+      const p = st && profileMap.get(st.user_id);
+      return { full_name: p?.full_name || st?.student_no || ("Student #" + a.student_id), student_no: st?.student_no || "—", class_name: className, status: a.status, recorded_at: a.recorded_at };
     });
     const present = allAttendance.filter((x: any) => x.status === "present").length;
     const late = allAttendance.filter((x: any) => x.status === "late").length;
