@@ -241,6 +241,7 @@ async function teacherDashboard(){
 
 // ---------- Admin pages ----------
 async function usersPage(){
+  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],skeletonRows(4)))}<div id="admin-teacher-assignment-container"></div>`);
   const {users=[]}=await callCached('admin/users');
   const rows=users.map(u=>`<tr>
     <td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td>
@@ -253,9 +254,11 @@ async function usersPage(){
       ${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}
     </td>
   </tr>`).join('');
-  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}<div id="admin-teacher-assignment-container"></div>`);
+  const tableWrap = app.querySelector('.table-wrap');
+  if (tableWrap) tableWrap.outerHTML = rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.');
 }
 async function subjectsPage(){
+  shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30" placeholder="e.g. CS-401"></label><label>Name<input name="name" required maxlength="120" placeholder="e.g. Software Engineering"></label><label>Academic year<select id="subject-year"><option>Loading...</option></select></label><label>Semester<select name="semester_id" id="subject-sem"><option>Loading...</option></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],skeletonRows(4)))}<div id="edit-subject-container"></div>`);
   const [list,reg]=await Promise.all([callCached('subjects'),callCached('registration/subjects')]);
   catalog=reg;
   const rows=(list.subjects||[]).map(s=>`<tr>
@@ -268,7 +271,10 @@ async function subjectsPage(){
       <button class="button small danger" data-action="delete-subject" data-id="${s.id}">Delete</button>
     </td>
   </tr>`).join('');
-  shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30" placeholder="e.g. CS-401"></label><label>Name<input name="name" required maxlength="120" placeholder="e.g. Software Engineering"></label><label>Academic year<select id="subject-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id" id="subject-sem"></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],rows,'No subjects configured.'))}<div id="edit-subject-container"></div>`);
+  const tableWrap = app.querySelector('.table-wrap');
+  if (tableWrap) tableWrap.outerHTML = rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],rows,'No subjects configured.');
+  const yearSel = document.querySelector('#subject-year');
+  if (yearSel) yearSel.innerHTML = (catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('');
   updateSubjectSemesters();
 }
 function updateSubjectSemesters(){const y=document.querySelector('#subject-year'),s=document.querySelector('#subject-sem');if(y&&s)s.innerHTML=(catalog.semesters||[]).filter(x=>Number(x.academic_year_id)===Number(y.value)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');}
@@ -276,6 +282,19 @@ function updateSubjectSemesters(){const y=document.querySelector('#subject-year'
 // NEW: Admin attendance overview page
 async function overviewPage(){
   const month = monthNow();
+  shell(`${heading('ADMINISTRATOR','Attendance Overview','Cross-class attendance activity by month.')}
+  <div class="stats three" style="margin-bottom:22px">
+    <div class="stat"><span>Sessions this month</span><strong><span class="skel"></span></strong></div>
+    <div class="stat"><span>Total present/late</span><strong style="color:#3d6d3d"><span class="skel"></span></strong></div>
+    <div class="stat"><span>Total absent</span><strong style="color:#913b30"><span class="skel"></span></strong></div>
+  </div>
+  ${card('Sessions',`<div class="button-row">
+    <label style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px">Month<input type="month" id="overview-month" value="${month}"></label>
+    <button class="button primary" data-action="load-overview">View</button>
+    <button class="button" data-action="export-overview-csv" style="margin-left:auto">Export CSV</button>
+  </div>
+  <div id="overview-table">${rowsTable(['SESSION','TEACHER','STATUS','PRESENT','LATE','ABSENT'],skeletonRows(4))}</div>`)}`);
+
   const data = await callCached('admin/attendance/overview', { query: `&month=${month}` });
   const sessions = data.sessions || [];
   const rows = sessions.map(s => `<tr>
@@ -286,18 +305,15 @@ async function overviewPage(){
     <td style="color:#7a5a1e;font-weight:700">${s.late||0}</td>
     <td style="color:#913b30;font-weight:700">${s.absent||0}</td>
   </tr>`).join('');
-  shell(`${heading('ADMINISTRATOR','Attendance Overview','Cross-class attendance activity by month.')}
-  <div class="stats three" style="margin-bottom:22px">
+
+  const stats = app.querySelector('.stats.three');
+  if (stats) stats.outerHTML = `<div class="stats three" style="margin-bottom:22px">
     <div class="stat"><span>Sessions this month</span><strong>${data.total_sessions||0}</strong></div>
     <div class="stat"><span>Total present/late</span><strong style="color:#3d6d3d">${data.total_present||0}</strong></div>
     <div class="stat"><span>Total absent</span><strong style="color:#913b30">${data.total_absent||0}</strong></div>
-  </div>
-  ${card('Sessions',`<div class="button-row">
-    <label style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px">Month<input type="month" id="overview-month" value="${month}"></label>
-    <button class="button primary" data-action="load-overview">View</button>
-    <button class="button" data-action="export-overview-csv" style="margin-left:auto">Export CSV</button>
-  </div>
-  <div id="overview-table">${rowsTable(['SESSION','TEACHER','STATUS','PRESENT','LATE','ABSENT'],rows,'No sessions recorded for this month.')}</div>`)}`);
+  </div>`;
+  const tableEl = document.querySelector('#overview-table');
+  if (tableEl) tableEl.innerHTML = rowsTable(['SESSION','TEACHER','STATUS','PRESENT','LATE','ABSENT'],rows,'No sessions recorded for this month.');
 }
 
 // ---------- Student pages ----------
@@ -307,18 +323,24 @@ async function monthlyPage(){
   const month=monthNow();
   let query=`&month=${month}`;
   if(user.role==='teacher'){const a=user.subjects?.[0];if(a)query+=`&teacher_subject_id=${a.assignment_id}`;}
-  const data=await call('reports/monthly',{query});
-  const rows=buildReportRows(data);
   const selectors=user.role==='teacher'?`<label>Subject<select id="report-assignment">${(user.subjects||[]).map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select></label>`:'';
-  shell(`${heading(user.role==='teacher'?'TEACHER':'STUDENT','Monthly attendance',user.role==='teacher'?'Attendance totals for your assigned class and subject.':'Check your monthly attendance percentage.')}${card('Report filters',`<form id="month-form" class="form-grid">${selectors}<label>Month<input type="month" name="month" value="${month}"></label><button class="button primary">View report</button><button type="button" class="button" data-action="export-monthly-csv" style="align-self:end">Export CSV</button></form>`)}${card(`Attendance · ${esc(data.month)}`,`<div id="report-table-container">${rowsTable(user.role==='teacher'?['STUDENT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS']:['SUBJECT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS'],rows,'No sessions recorded for this month.')}</div>`)}<p class="tiny">The attendance requirement is ${data.required_percentage ?? 75}%.</p>`);
+  
+  shell(`${heading(user.role==='teacher'?'TEACHER':'STUDENT','Monthly attendance',user.role==='teacher'?'Attendance totals for your assigned class and subject.':'Check your monthly attendance percentage.')}${card('Report filters',`<form id="month-form" class="form-grid">${selectors}<label>Month<input type="month" name="month" value="${month}"></label><button class="button primary">View report</button><button type="button" class="button" data-action="export-monthly-csv" style="align-self:end">Export CSV</button></form>`)}${card(`Attendance · ${esc(month)}`,`<div id="report-table-container">${rowsTable(user.role==='teacher'?['STUDENT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS']:['SUBJECT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS'],skeletonRows(4))}</div>`)}<p class="tiny">The attendance requirement is 75%.</p>`);
+  
+  const data=await callCached('reports/monthly',{query});
+  const rows=buildReportRows(data);
+  const container=document.querySelector('#report-table-container');
+  if(container)container.innerHTML=rowsTable(user.role==='teacher'?['STUDENT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS']:['SUBJECT','ATTENDED','TOTAL CLASSES','ATTENDANCE','STATUS'],rows,'No sessions recorded for this month.');
 }
 function buildReportRows(data) {
   return (data.report||[]).map(r=>`<tr${r.highlight_red?' style="background:#fff5f5"':''}><td>${user.role==='teacher'?`${esc(r.full_name)}<small>${esc(r.student_no||'')}</small>`:`${esc(r.code||'')} — ${esc(r.name||'')}`}</td><td>${r.attended}</td><td>${r.total_sessions}</td><td><b>${Number(r.percentage).toFixed(2)}%</b></td><td>${statusPill(r.meets_requirement?'present':'absent').replace('present','good').replace('absent','warn')} <span class="pill ${r.meets_requirement?'good':'warn'}">${esc(r.status)}</span></td></tr>`);
 }
 async function historyPage(){
-  const {attendance=[]}=await call('student/attendance');
+  shell(`${heading('STUDENT','My attendance','Your recorded attendance sessions.')}${card('Attendance history',rowsTable(['SUBJECT','SEMESTER','SESSION','STATUS','TIME'],skeletonRows(4)))}`);
+  const {attendance=[]}=await callCached('student/attendance');
   const rows=attendance.map(a=>`<tr><td>${esc(a.code||'')} — ${esc(a.name)}</td><td>${esc(a.semester_name)}</td><td>${esc(a.title||'Class attendance')}</td><td>${statusPill(a.status)}</td><td>${dateTime(a.recorded_at)}</td></tr>`).join('');
-  shell(`${heading('STUDENT','My attendance','Your recorded attendance sessions.')}${card('Attendance history',rowsTable(['SUBJECT','SEMESTER','SESSION','STATUS','TIME'],rows,'No attendance records yet.'))}`);
+  const tableWrap = app.querySelector('.table-wrap');
+  if(tableWrap)tableWrap.outerHTML=rowsTable(['SUBJECT','SEMESTER','SESSION','STATUS','TIME'],rows,'No attendance records yet.');
 }
 
 // ---------- Teacher pages ----------
