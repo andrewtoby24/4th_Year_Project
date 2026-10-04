@@ -66,22 +66,11 @@ async function catalog() {
   };
 }
 async function assignmentsFor(userId: string) {
-  const terms = await one(admin.from("teacher_terms").select("id,semester_id,class_id").eq("teacher_id", userId));
-  if (!terms.length) return [];
-  const termIds = terms.map((t: any) => t.id);
-  const [links, classes, semesters, years, subjects] = await Promise.all([
-    one(admin.from("teacher_subjects").select("id,teacher_term_id,subject_id").in("teacher_term_id", termIds)),
-    one(admin.from("classes").select("id,name,academic_year_id")),
-    one(admin.from("semesters").select("id,name,semester_number,academic_year_id")),
-    one(admin.from("academic_years").select("id,name,year_level")),
-    one(admin.from("subjects").select("id,code,name,semester_id")),
-  ]);
-  const byId = (rows: any[]) => new Map(rows.map((r) => [r.id, r]));
-  const classMap=byId(classes), semMap=byId(semesters), yearMap=byId(years), subjectMap=byId(subjects);
+  const terms = await one(admin.from("teacher_terms").select("id,semester_id,class_id,class:classes(id,name),semester:semesters(id,name,semester_number,academic_year_id,year:academic_years(id,name,year_level)),links:teacher_subjects(id,subject_id,subject:subjects(id,code,name,semester_id))").eq("teacher_id", userId));
   return terms.flatMap((term: any) => {
-    const cls: any=classMap.get(term.class_id), sem: any=semMap.get(term.semester_id), year: any=sem?yearMap.get(sem.academic_year_id):null;
-    return links.filter((link: any) => link.teacher_term_id===term.id).map((link: any) => {
-      const sub: any=subjectMap.get(link.subject_id);
+    const cls = term.class, sem = term.semester, year = sem?.year;
+    return (term.links || []).map((link: any) => {
+      const sub = link.subject;
       return {assignment_id:link.id,id:sub?.id,code:sub?.code,name:sub?.name,semester_id:term.semester_id,semester_name:sem?.name,semester_number:sem?.semester_number,academic_year_id:year?.id,academic_year_name:year?.name,year_level:year?.year_level,class_id:cls?.id,class_name:cls?.name};
     });
   });
@@ -96,12 +85,8 @@ async function ownedAssignment(userId: string, assignmentId: number) {
 async function asUser(profile: any) {
   const result: any = { id: profile.id, username: profile.username, full_name: profile.full_name, role: profile.role };
   if (profile.role === "student") {
-    const student = await one(admin.from("students").select("id,student_no,class_id,semester_id,device_uuid").eq("user_id", profile.id).maybeSingle());
-    const [cls, sem] = await Promise.all([
-      one(admin.from("classes").select("id,name,academic_year_id").eq("id", student.class_id).single()),
-      one(admin.from("semesters").select("id,name,semester_number,academic_year_id").eq("id", student.semester_id).single()),
-    ]);
-    const year = await one(admin.from("academic_years").select("id,name,year_level").eq("id", sem.academic_year_id).single());
+    const student = await one(admin.from("students").select("id,student_no,class_id,semester_id,device_uuid,class:classes(id,name,academic_year_id),semester:semesters(id,name,semester_number,academic_year_id,year:academic_years(id,name,year_level))").eq("user_id", profile.id).single());
+    const cls = student.class, sem = student.semester, year = sem.year;
     Object.assign(result,{student_no:student.student_no,class_name:cls.name,class_id:cls.id,semester_id:sem.id,semester:{id:sem.id,name:sem.name,number:sem.semester_number},academic_year:{id:year.id,name:year.name,year_level:year.year_level}});
   } else if (profile.role === "teacher") {
     result.subjects=await assignmentsFor(profile.id);
@@ -111,16 +96,13 @@ async function asUser(profile: any) {
 }
 async function sessionView(session: any, includeToken = false) {
   if (!session) return null;
-  const link = await one(admin.from("teacher_subjects").select("id,subject_id,teacher_term_id").eq("id",session.teacher_subject_id).single());
-  const [term, subject] = await Promise.all([
-    one(admin.from("teacher_terms").select("semester_id,class_id").eq("id",link.teacher_term_id).single()),
-    one(admin.from("subjects").select("id,code,name,semester_id").eq("id",link.subject_id).single()),
-  ]);
+  const link = await one(admin.from("teacher_subjects").select("id,subject_id,teacher_term_id,subject:subjects(id,code,name,semester_id),term:teacher_terms(semester_id,class_id)").eq("id",session.teacher_subject_id).single());
+  const term = link.term, subject = link.subject;
   const [cls,sem]=await Promise.all([
     one(admin.from("classes").select("id,name,academic_year_id").eq("id",term.class_id).single()),
-    one(admin.from("semesters").select("id,name,semester_number,academic_year_id").eq("id",term.semester_id).single()),
+    one(admin.from("semesters").select("id,name,semester_number,academic_year_id,year:academic_years(id,name,year_level)").eq("id",term.semester_id).single()),
   ]);
-  const year=await one(admin.from("academic_years").select("id,name,year_level").eq("id",sem.academic_year_id).single());
+  const year = sem.year;
   const view:any={id:session.id,session_id:session.id,title:session.title,year_level:year.year_level,class_id:cls.id,class_name:cls.name,teacher_subject_id:link.id,starts_at:session.starts_at,ended_at:session.ended_at,ends_at:session.ended_at,status:session.active?"ACTIVE":"ENDED",active:session.active,attendance_radius_meters:session.attendance_radius_meters,center_accuracy:session.center_accuracy,subject,academic_year:{id:year.id,year_level:year.year_level,name:year.name},semester:{id:sem.id,number:sem.semester_number,name:sem.name}};
   if(includeToken&&session.active&&session.qr_display_token){view.token=session.qr_display_token;view.qr_payload=`ATTENDQR:${session.qr_display_token}`;}
   return view;
@@ -200,7 +182,7 @@ async function api(request: Request) {
   if(action==='student/attendance'){
     requireRole(profile,'student');const student=await one(admin.from('students').select('id').eq('user_id',profile.id).single());
     const rows=await one(admin.from('attendance').select('status,recorded_at,attendance_sessions!inner(id,title,teacher_subject_id,teacher_id)').eq('student_id',student.id).order('recorded_at',{ascending:false}));
-    const links=await one(admin.from('teacher_subjects').select('id,subject_id,teacher_term_id'));const subjects=await one(admin.from('subjects').select('id,code,name,semester_id'));const semesters=await one(admin.from('semesters').select('id,name,semester_number'));
+    const [links,subjects,semesters]=await Promise.all([one(admin.from('teacher_subjects').select('id,subject_id,teacher_term_id')),one(admin.from('subjects').select('id,code,name,semester_id')),one(admin.from('semesters').select('id,name,semester_number'))]);
     return {attendance:rows.map((a:any)=>{const session=a.attendance_sessions,link=links.find((x:any)=>x.id===session.teacher_subject_id),subject=link&&subjects.find((x:any)=>x.id===link.subject_id),sem=subject&&semesters.find((x:any)=>x.id===subject.semester_id);return {status:a.status,recorded_at:a.recorded_at,title:session.title,code:subject?.code,name:subject?.name,semester_name:sem?.name,teacher_name:''};})};
   }
   if(action==='student/scan'){
@@ -268,9 +250,8 @@ async function api(request: Request) {
     const month=String(input.month||new Date().toISOString().slice(0,7));if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw new HttpError('Month must use YYYY-MM format.',422);
     const from=`${month}-01T00:00:00.000Z`,to=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),1)).toISOString();let report:any[]=[],yearLevel=0,response:any={month,required_percentage:75};
     if(profile.role==='student'){
-      const st=await one(admin.from('students').select('id,class_id,semester_id').eq('user_id',profile.id).single());const term=await one(admin.from('semesters').select('academic_year_id').eq('id',st.semester_id).single());const year=await one(admin.from('academic_years').select('year_level').eq('id',term.academic_year_id).single());yearLevel=year.year_level;
-      const subjects=await one(admin.from('subjects').select('id,code,name').eq('semester_id',st.semester_id).eq('teacher_registration_enabled',true));
-      const terms=await one(admin.from('teacher_terms').select('id').eq('class_id',st.class_id).eq('semester_id',st.semester_id));const links=terms.length?await one(admin.from('teacher_subjects').select('id,subject_id').in('teacher_term_id',terms.map((x:any)=>x.id))):[];
+      const st=await one(admin.from('students').select('id,class_id,semester_id,semester:semesters(academic_year_id,year:academic_years(year_level))').eq('user_id',profile.id).single());yearLevel=st.semester.year.year_level;
+      const [subjects,terms]=await Promise.all([one(admin.from('subjects').select('id,code,name').eq('semester_id',st.semester_id).eq('teacher_registration_enabled',true)),one(admin.from('teacher_terms').select('id').eq('class_id',st.class_id).eq('semester_id',st.semester_id))]);const links=terms.length?await one(admin.from('teacher_subjects').select('id,subject_id').in('teacher_term_id',terms.map((x:any)=>x.id))):[];
       const sessions=links.length?await one(admin.from('attendance_sessions').select('id,teacher_subject_id,starts_at').in('teacher_subject_id',links.map((x:any)=>x.id)).gte('starts_at',from).lt('starts_at',to)):[];const attendance=sessions.length?await one(admin.from('attendance').select('session_id,status').eq('student_id',st.id).in('session_id',sessions.map((x:any)=>x.id))):[];
       report=subjects.map((sub:any)=>{const assignmentIds=new Set(links.filter((x:any)=>x.subject_id===sub.id).map((x:any)=>x.id));const own=sessions.filter((x:any)=>assignmentIds.has(x.teacher_subject_id));const attended=attendance.filter((a:any)=>own.some((x:any)=>x.id===a.session_id)&&(a.status==='present'||a.status==='late')).length;const percentage=own.length?Math.round(attended/own.length*10000)/100:0;return {...sub,attended,total_sessions:own.length,percentage,meets_requirement:percentage>=75,highlight_red:percentage<75,status:percentage>=75?'Good standing':'Below requirement'};});
       response.semester_id=st.semester_id;

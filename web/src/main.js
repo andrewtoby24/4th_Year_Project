@@ -22,7 +22,7 @@ const call = async (action, {method='GET', body, query=''} = {}) => {
   if (body) headers['Content-Type'] = 'application/json';
   if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
   let response;
-  try { response = await fetch(`${API_URL}?action=${encodeURIComponent(action)}${query}`, {method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'omit'}); }
+  try { response = await fetch(`${API_URL}?action=${encodeURIComponent(action)}&forceFunctionRegion=ap-southeast-1${query}`, {method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'omit'}); }
   catch { throw new Error('Could not reach the API. Check its URL, hosting status, and CORS settings.'); }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { const err = new Error(data.message || 'The request failed.'); err.code = data.code; throw err; }
