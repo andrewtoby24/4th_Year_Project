@@ -500,13 +500,16 @@ async function api(request: Request) {
     const radius = Number(session.attendance_radius_meters) || 100;
     const rawDistance = distanceMeters(latitude, longitude, session.center_latitude, session.center_longitude);
     
-    // Accuracy Buffer: Subtract GPS/Wi-Fi location uncertainty (up to 40m) to prevent false "Out of Area" errors inside classroom
-    const accuracyBuffer = Math.min(accuracy, 40);
+    // Dynamic Geofence Buffer: Account for Teacher PC Wi-Fi accuracy + Student Phone accuracy
+    const centerAcc = Number(session.center_accuracy) || 0;
+    const studentAcc = Number(accuracy) || 0;
+    const maxAllowedRadius = Math.max(radius, centerAcc, studentAcc);
+    const accuracyBuffer = Math.min(studentAcc + centerAcc, 150);
     const effectiveDistance = Math.max(0, rawDistance - accuracyBuffer);
 
-    if (effectiveDistance > radius) {
+    if (effectiveDistance > maxAllowedRadius) {
       const distMeters = Math.round(rawDistance);
-      throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${radius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA", { distance_from_classroom: distMeters, distance: distMeters, allowed_radius: radius });
+      throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${maxAllowedRadius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA", { distance_from_classroom: distMeters, distance: distMeters, allowed_radius: maxAllowedRadius });
     }
     // Determine late status
     const lateThresholdMinutes = Number(Deno.env.get("LATE_THRESHOLD_MINUTES") || 0);
@@ -516,12 +519,13 @@ async function api(request: Request) {
       const minutesSinceStart = (Date.now() - sessionStart) / 60000;
       if (minutesSinceStart > lateThresholdMinutes) attendStatus = "late";
     }
-    const inserted = await admin.from("attendance").insert({ session_id: session.id, student_id: studentRow.id, status: attendStatus, latitude, longitude, accuracy, distance_from_classroom: distance }).select("id");
+    const distForDb = Math.round(rawDistance);
+    const inserted = await admin.from("attendance").insert({ session_id: session.id, student_id: studentRow.id, status: attendStatus, latitude, longitude, accuracy, distance_from_classroom: distForDb }).select("id");
     if (inserted.error?.code === "23505") throw new HttpError("Attendance has already been recorded.", 409, "DUPLICATE_ATTENDANCE");
     if (inserted.error?.code === "P0001") throw new HttpError("This QR attendance session has ended.", 410, "SESSION_ENDED");
     if (inserted.error) throw new HttpError(inserted.error.message, 400);
     const statusMsg = attendStatus === "late" ? "Attendance recorded as late." : "Attendance recorded successfully.";
-    return { code: "SUCCESS", message: statusMsg, status: attendStatus, distance_from_classroom: distance, allowed_radius: radius };
+    return { code: "SUCCESS", message: statusMsg, status: attendStatus, distance_from_classroom: distForDb, allowed_radius: maxAllowedRadius };
   }
 
   // Helper: Save assignments for a target teacher (supports force overwrite)
