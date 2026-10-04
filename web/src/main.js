@@ -241,12 +241,12 @@ async function teacherDashboard(){
 
 // ---------- Admin pages ----------
 async function usersPage(){
-  const {users=[]}=await call('admin/users');
+  const {users=[]}=await callCached('admin/users');
   const rows=users.map(u=>`<tr><td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td><td>${esc(u.role)}</td><td>${statusPill(u.status)}</td><td class="actions">${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}</td></tr>`).join('');
   shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}`);
 }
 async function subjectsPage(){
-  const [list,reg]=await Promise.all([call('subjects'),call('registration/subjects')]);
+  const [list,reg]=await Promise.all([callCached('subjects'),callCached('registration/subjects')]);
   catalog=reg;
   const rows=(list.subjects||[]).map(s=>`<tr><td>${esc(s.code||'—')}</td><td>${esc(s.name)}</td><td>${esc(s.academic_year_name||'')}</td><td>${esc(s.semester_name||'')}</td></tr>`).join('');
   shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30"></label><label>Name<input name="name" required maxlength="120"></label><label>Academic year<select id="subject-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Semester<select name="semester_id" id="subject-sem"></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER'],rows))}`);
@@ -257,7 +257,7 @@ function updateSubjectSemesters(){const y=document.querySelector('#subject-year'
 // NEW: Admin attendance overview page
 async function overviewPage(){
   const month = monthNow();
-  const data = await call('admin/attendance/overview', { query: `&month=${month}` });
+  const data = await callCached('admin/attendance/overview', { query: `&month=${month}` });
   const sessions = data.sessions || [];
   const rows = sessions.map(s => `<tr>
     <td><b>${esc(s.title)}</b><small>${dateTime(s.starts_at)}</small></td>
@@ -330,7 +330,11 @@ async function loadAttendanceSessions(){
 }
 async function assignmentPage(){
   const assignments=user.subjects||[];
-  catalog=await call('registration/subjects');
+  // If catalog is already loaded, render instantly without waiting for network
+  if (!catalog) {
+    shell(`${heading('TEACHER','Academic assignments','Choose a class, semester, and the subjects you teach.')}${skeletonCard(2)}`);
+    catalog = await callCached('registration/subjects');
+  }
   shell(`${heading('TEACHER','Academic assignments','Choose a class, semester, and the subjects you teach.')}${card('Choose an assignment',`<form id="assignment-form" class="form-stack"><div class="form-grid"><label>Academic year<select name="academic_year_id" id="assignment-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Class<select name="class_id" id="assignment-class"></select></label><label>Semester<select name="semester_id" id="assignment-semester"></select></label></div><fieldset><legend>Subjects</legend><div id="assignment-subjects" class="check-list"></div></fieldset><button class="button primary">Save assignment</button></form>`)}${card('Current assignments',assignments.map(a=>`<div class="assignment"><b>${esc(a.academic_year_name)} · ${esc(a.semester_name)} · ${esc(a.class_name)}</b><span>${esc(a.code||'')} — ${esc(a.name)}</span></div>`).join('')||'<p>No assignments have been saved yet.</p>')}`);
   updateAssignmentOptions();
 }
