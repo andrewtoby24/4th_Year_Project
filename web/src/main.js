@@ -722,8 +722,10 @@ async function submitScan(){
   if(!qr){notice('Scan a QR code or enter its token first.','error');return;}
   notice('Getting a precise location…');
   if(!navigator.geolocation){
-    if(alertBox)alertBox.innerHTML='<div class="geofence-alert"><h4>⚠️ Location Error</h4><p>This browser does not provide location services.</p></div>';
-    notice('This browser does not provide location services.','error');
+    const errMsg = 'This browser does not provide location services.';
+    if(alertBox)alertBox.innerHTML=`<div class="geofence-alert"><h4>⚠️ Location Error</h4><p>${esc(errMsg)}</p></div>`;
+    showLocationHelpModal(errMsg);
+    notice(errMsg,'error');
     return;
   }
   navigator.geolocation.getCurrentPosition(async pos=>{
@@ -734,6 +736,8 @@ async function submitScan(){
       if(alertBox)alertBox.innerHTML=`<div class="notice success" style="display:block">✅ ${esc(result.message||'Attendance recorded successfully!')} (${Math.round(result.distance_from_classroom||0)}m from classroom point)</div>`;
       input.value='';
     }catch(e){
+      const distance = e.distance_from_classroom || e.distance;
+      showOutOfRadiusModal(e.message || 'Verification failed. You are outside the 100m attendance radius.', distance);
       if(alertBox){
         alertBox.innerHTML=`<div class="geofence-alert">
           <h4>📍 Attendance Verification Failed</h4>
@@ -746,8 +750,9 @@ async function submitScan(){
       notice(e.message,'error');
     }
   },e=>{
-    const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS and retry.';
+    const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS/Wi-Fi location and retry.';
     if(e.code===1) showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
+    else showOutOfRadiusModal(errMsg);
     if(alertBox){
       alertBox.innerHTML=`<div class="geofence-alert">
         <h4>📍 Location Access Error</h4>
@@ -755,8 +760,37 @@ async function submitScan(){
       </div>`;
     }
     notice(errMsg,'error');
-  },{enableHighAccuracy:true,timeout:20000,maximumAge:0});
+  },{enableHighAccuracy:true,timeout:12000,maximumAge:10000});
 }
+
+function showOutOfRadiusModal(message, distance) {
+  const existing = document.querySelector('#modal-out-of-radius');
+  if (existing) existing.remove();
+  const container = document.createElement('div');
+  container.innerHTML = `<div class="modal-overlay" id="modal-out-of-radius">
+    <div class="modal-card" style="text-align:center;border:2px solid #e07267;background:#fffaf0;width:min(100%,480px)">
+      <div style="font-size:52px;margin-bottom:6px">🚨</div>
+      <h3 style="margin:0 0 10px;color:#913b30;font-size:22px;letter-spacing:-0.02em">Out of Attendance Area</h3>
+      <div style="background:#fdf0ed;border:1px solid #e49f98;padding:16px;border-radius:12px;margin-bottom:18px">
+        <p style="margin:0 0 8px;font-weight:700;font-size:15px;color:#8a2720">${esc(message)}</p>
+        ${distance ? `<span class="pill absent" style="font-size:14px;padding:6px 14px">Your Distance: ${Math.round(distance)}m from classroom</span>` : ''}
+      </div>
+
+      <div style="background:#fff;border:1px solid var(--line);padding:14px;border-radius:10px;text-align:left;font-size:13px;line-height:1.6;margin-bottom:18px;color:var(--navy)">
+        <b>💡 What should you do?</b>
+        <ul style="margin:6px 0 0;padding-left:18px">
+          <li>Walk closer to the teacher's desk (within 100 meters).</li>
+          <li>Ensure Wi-Fi & Location services are turned on.</li>
+          <li>Rescan the live QR code shown on the teacher's screen.</li>
+        </ul>
+      </div>
+
+      <button class="button primary full" onclick="document.querySelector('#modal-out-of-radius')?.remove()">Got it (Try Again)</button>
+    </div>
+  </div>`;
+  document.body.appendChild(container.firstElementChild);
+}
+
 function showLocationHelpModal(message) {
   const existing = document.querySelector('#modal-location-help');
   if (existing) existing.remove();
@@ -765,18 +799,17 @@ function showLocationHelpModal(message) {
     <div class="modal-card">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;color:var(--danger)">
         <span style="font-size:28px">📍</span>
-        <h3 style="margin:0">Location Permission Required</h3>
+        <h3 style="margin:0">Location Services Required</h3>
       </div>
       <p style="margin-bottom:16px;color:var(--muted)">${esc(message || 'Browser location access was blocked or unavailable.')}</p>
       
       <div style="background:var(--bg-muted);padding:14px;border-radius:10px;font-size:13px;line-height:1.6;margin-bottom:18px">
-        <b>How to enable location access:</b>
+        <b>How to enable location on Mac / Mobile:</b>
         <ol style="margin:8px 0 0;padding-left:20px">
-          <li>Look at your browser address bar (top left next to the URL).</li>
-          <li>Click the <b>lock icon 🔒</b> or <b>tune icon 🛠️</b>.</li>
-          <li>Find <b>Location</b> and change setting to <b>Allow</b>.</li>
-          <li>If on Mac, open <b>System Settings ⚙️ → Privacy & Security → Location Services</b> and enable your browser.</li>
-          <li>Refresh this page and try again!</li>
+          <li>In your browser address bar (top left), click <b>lock icon 🔒</b> or <b>tune icon 🛠️</b>.</li>
+          <li>Set <b>Location</b> permission to <b>Allow</b>.</li>
+          <li>On Mac: Open <b>System Settings ⚙️ → Privacy & Security → Location Services</b>. Turn ON Location Services AND check your browser (Chrome/Safari).</li>
+          <li>Refresh this page and try scanning again!</li>
         </ol>
       </div>
 
@@ -790,30 +823,39 @@ function showLocationHelpModal(message) {
 }
 function getFreshLocation(){
   return new Promise((resolve,reject)=>{
-    if(!navigator.geolocation){reject(new Error('This browser does not provide location services.'));return;}
+    if(!navigator.geolocation){
+      const err = new Error('This browser does not provide location services.');
+      showLocationHelpModal(err.message);
+      reject(err);
+      return;
+    }
+    const tryLowAccuracy = () => {
+      navigator.geolocation.getCurrentPosition(
+        pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),
+        err2=>{
+          if(err2.code===1){
+            showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
+            reject(new Error('Location permission is required. Enable location in browser and Mac System Settings.'));
+          } else {
+            showLocationHelpModal('Could not retrieve Mac location. Ensure Wi-Fi and Location Services are active in Mac System Settings.');
+            reject(new Error('Could not get location. Enable GPS/Wi-Fi location and retry.'));
+          }
+        },
+        {enableHighAccuracy:false,timeout:12000,maximumAge:30000}
+      );
+    };
+
     navigator.geolocation.getCurrentPosition(
       pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),
       err=>{
         if(err.code===1){
           showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
-          reject(new Error('Location permission is required. Enable location in your browser and Mac System Settings.'));
-          return;
+          reject(new Error('Location permission is required. Enable location in browser and Mac System Settings.'));
+        } else {
+          tryLowAccuracy();
         }
-        navigator.geolocation.getCurrentPosition(
-          pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),
-          err2=>{
-            if(err2.code===1){
-              showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
-              reject(new Error('Location permission is required. Enable location in your browser and Mac System Settings.'));
-            } else {
-              showLocationHelpModal('Could not retrieve your location. Check your GPS / network connection.');
-              reject(new Error('Could not get location. Enable GPS or network location and retry.'));
-            }
-          },
-          {enableHighAccuracy:false,timeout:12000,maximumAge:10000}
-        );
       },
-      {enableHighAccuracy:true,timeout:8000,maximumAge:5000}
+      {enableHighAccuracy:true,timeout:6000,maximumAge:10000}
     );
   });
 }

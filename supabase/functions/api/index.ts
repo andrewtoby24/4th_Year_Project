@@ -289,7 +289,7 @@ async function api(request: Request) {
         const [cls, sem, attRecords] = await Promise.all([
           st.class_id ? one(admin.from("classes").select("name,academic_year_id").eq("id", st.class_id).maybeSingle()) : null,
           st.semester_id ? one(admin.from("semesters").select("name,academic_year_id").eq("id", st.semester_id).maybeSingle()) : null,
-          one(admin.from("attendance").select("status").eq("student_id", targetUserId))
+          one(admin.from("attendance").select("status").eq("student_id", st.id))
         ]);
         let yearName = "";
         if (cls?.academic_year_id) {
