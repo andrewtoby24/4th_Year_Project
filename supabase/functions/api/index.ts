@@ -626,7 +626,26 @@ async function api(request: Request) {
     const assignmentId = Number(input.teacher_subject_id);
     await ownedAssignment(profile.id, assignmentId);
     const rows = await one(admin.from("attendance_sessions").select("id,title,starts_at,ended_at,active").eq("teacher_id", profile.id).eq("teacher_subject_id", assignmentId).order("starts_at", { ascending: false }));
-    return { sessions: rows.map((s: any) => ({ ...s, session_id: s.id, status: s.active ? "ACTIVE" : "ENDED" })) };
+    const sessionIds = rows.map((s: any) => s.id);
+    const attRecords = sessionIds.length ? await one(admin.from("attendance").select("session_id,status").in("session_id", sessionIds)) : [];
+    const countsMap = new Map();
+    attRecords.forEach((r: any) => {
+      if (!countsMap.has(r.session_id)) countsMap.set(r.session_id, { present: 0, late: 0, absent: 0 });
+      const c = countsMap.get(r.session_id);
+      if (r.status === "present") c.present++;
+      else if (r.status === "late") c.late++;
+      else if (r.status === "absent") c.absent++;
+    });
+    return {
+      sessions: rows.map((s: any) => ({
+        ...s,
+        session_id: s.id,
+        status: s.active ? "ACTIVE" : "ENDED",
+        present: countsMap.get(s.id)?.present || 0,
+        late: countsMap.get(s.id)?.late || 0,
+        absent: countsMap.get(s.id)?.absent || 0
+      }))
+    };
   }
   if (action === "attendance/session" || action === "attendance/live") {
     requireRole(profile, "teacher");
