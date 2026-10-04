@@ -424,8 +424,8 @@ async function api(request: Request) {
     return { code: "SUCCESS", message: statusMsg, status: attendStatus, distance_from_classroom: distance, allowed_radius: radius };
   }
 
-  // Helper: Save assignments for a target teacher
-  async function saveTeacherAssignments(targetTeacherId: string, yearId: number, semesterId: number, classId: number, subjectIds: number[]) {
+  // Helper: Save assignments for a target teacher (supports force overwrite)
+  async function saveTeacherAssignments(targetTeacherId: string, yearId: number, semesterId: number, classId: number, subjectIds: number[], force = false) {
     const ids = [...new Set((Array.isArray(subjectIds) ? subjectIds : [subjectIds]).map(Number).filter(Boolean))];
     const [year, sem, cls] = await Promise.all([
       one(admin.from("academic_years").select("id").eq("id", yearId).maybeSingle()),
@@ -440,9 +440,15 @@ async function api(request: Request) {
     const existing = await one(admin.from("teacher_subjects").select("id,subject_id").eq("teacher_term_id", term.id));
     const remove = existing.filter((x: any) => !ids.includes(x.subject_id));
     if (remove.length) {
-      const sessions = await one(admin.from("attendance_sessions").select("teacher_subject_id").in("teacher_subject_id", remove.map((x: any) => x.id)));
-      if (sessions.length) throw new HttpError("Assignments with attendance history cannot be removed.", 409);
-      await one(admin.from("teacher_subjects").delete().in("id", remove.map((x: any) => x.id)));
+      const removeIds = remove.map((x: any) => x.id);
+      const sessions = await one(admin.from("attendance_sessions").select("id").in("teacher_subject_id", removeIds));
+      if (sessions.length && !force) throw new HttpError("SESSIONS_EXIST: Some assignments have recorded attendance. Enable Force Overwrite to delete them.", 409, "SESSIONS_EXIST");
+      if (sessions.length && force) {
+        const sessionIds = sessions.map((s: any) => s.id);
+        await admin.from("attendance").delete().in("session_id", sessionIds);
+        await admin.from("attendance_sessions").delete().in("id", sessionIds);
+      }
+      await one(admin.from("teacher_subjects").delete().in("id", removeIds));
     }
     const had = new Set(existing.map((x: any) => x.subject_id));
     const adds = ids.filter(id => !had.has(id));
@@ -453,7 +459,8 @@ async function api(request: Request) {
   // ---------- Teacher endpoints ----------
   if (action === "teacher/assignments") {
     requireRole(profile, "teacher");
-    await saveTeacherAssignments(profile.id, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids);
+    const force = Boolean(input.force || input.overwrite);
+    await saveTeacherAssignments(profile.id, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids, force);
     return { message: "Academic assignment saved.", user: await asUser(profile) };
   }
   if (action === "admin/teacher/assignments") {
@@ -462,7 +469,8 @@ async function api(request: Request) {
     if (!teacherId) throw new HttpError("Teacher ID is required.", 422);
     const teacherProf = await one(admin.from("profiles").select("id,role").eq("id", teacherId).maybeSingle());
     if (!teacherProf || teacherProf.role !== "teacher") throw new HttpError("Target user is not a teacher.", 422);
-    await saveTeacherAssignments(teacherId, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids);
+    const force = Boolean(input.force || input.overwrite);
+    await saveTeacherAssignments(teacherId, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids, force);
     return { message: "Teacher assignment updated successfully.", subjects: await assignmentsFor(teacherId) };
   }
   if (action === "admin/teacher/assignments/list") {
@@ -474,6 +482,7 @@ async function api(request: Request) {
   }
   if (action === "teacher/assignments/delete" || action === "admin/teacher/assignments/delete") {
     const assignmentId = Number(input.assignment_id);
+    const force = Boolean(input.force || input.overwrite);
     if (!assignmentId) throw new HttpError("Assignment ID is required.", 422);
     const link = await one(admin.from("teacher_subjects").select("id,teacher_term_id").eq("id", assignmentId).maybeSingle());
     if (!link) throw new HttpError("Assignment not found.", 404);
@@ -482,7 +491,12 @@ async function api(request: Request) {
       if (term.teacher_id !== profile.id) throw new HttpError("Forbidden.", 403);
     }
     const sessions = await one(admin.from("attendance_sessions").select("id").eq("teacher_subject_id", assignmentId));
-    if (sessions.length) throw new HttpError("Cannot remove this assignment because attendance sessions have already been recorded for it.", 409);
+    if (sessions.length && !force) throw new HttpError("SESSIONS_EXIST: Cannot remove this assignment because attendance sessions have been recorded for it.", 409, "SESSIONS_EXIST");
+    if (sessions.length && force) {
+      const sessionIds = sessions.map((s: any) => s.id);
+      await admin.from("attendance").delete().in("session_id", sessionIds);
+      await admin.from("attendance_sessions").delete().in("id", sessionIds);
+    }
     await one(admin.from("teacher_subjects").delete().eq("id", assignmentId));
     return { message: "Assignment deleted successfully." };
   }

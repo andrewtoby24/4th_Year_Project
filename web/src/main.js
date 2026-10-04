@@ -240,22 +240,36 @@ async function teacherDashboard(){
 }
 
 // ---------- Admin pages ----------
+let usersPollTimer = null;
+function stopUsersPoll() {
+  if (usersPollTimer) { clearInterval(usersPollTimer); usersPollTimer = null; }
+}
+
 async function usersPage(){
-  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],skeletonRows(4)))}<div id="admin-teacher-assignment-container"></div>`);
-  const {users=[]}=await callCached('admin/users');
-  const rows=users.map(u=>`<tr>
-    <td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td>
-    <td>${esc(u.role)}</td>
-    <td>${statusPill(u.status)}</td>
-    <td class="actions">
-      ${u.role==='teacher'?`<button class="button small primary" data-action="admin-teacher-assignments" data-id="${u.id}" data-name="${esc(u.full_name)}">Reassign Subjects</button>`:''}
-      ${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}
-      ${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}
-      ${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}
-    </td>
-  </tr>`).join('');
-  const tableWrap = app.querySelector('.table-wrap');
-  if (tableWrap) tableWrap.outerHTML = rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.');
+  stopUsersPoll();
+  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('<div style="display:flex;justify-content:space-between;align-items:center"><span>Accounts</span><span class="live-feed-badge"><span class="pulse-dot"></span> LIVE SYNC</span></div>',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],skeletonRows(4)))}<div id="admin-teacher-assignment-container"></div>`);
+  
+  const updateUsersTable = async () => {
+    try {
+      const {users=[]}=await call('admin/users');
+      const rows=users.map(u=>`<tr>
+        <td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td>
+        <td>${esc(u.role)}</td>
+        <td>${statusPill(u.status)}</td>
+        <td class="actions">
+          ${u.role==='teacher'?`<button class="button small primary" data-action="admin-teacher-assignments" data-id="${u.id}" data-name="${esc(u.full_name)}">Reassign Subjects</button>`:''}
+          ${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}
+          ${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}
+          ${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}
+        </td>
+      </tr>`).join('');
+      const tableWrap = app.querySelector('.table-wrap');
+      if (tableWrap) tableWrap.outerHTML = rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.');
+    } catch (_) {}
+  };
+  
+  await updateUsersTable();
+  usersPollTimer = setInterval(updateUsersTable, 4000);
 }
 async function subjectsPage(){
   shell(`${heading('ADMINISTRATOR','Subjects','Maintain the available subject catalog.')}${card('Add a subject',`<form id="subject-form" class="form-grid"><label>Code (optional)<input name="code" maxlength="30" placeholder="e.g. CS-401"></label><label>Name<input name="name" required maxlength="120" placeholder="e.g. Software Engineering"></label><label>Academic year<select id="subject-year"><option>Loading...</option></select></label><label>Semester<select name="semester_id" id="subject-sem"><option>Loading...</option></select></label><button class="button primary">Save subject</button></form>`)}${card('Current subjects',rowsTable(['CODE','NAME','YEAR','SEMESTER','ACTIONS'],skeletonRows(4)))}<div id="edit-subject-container"></div>`);
@@ -513,6 +527,7 @@ function updateAssignmentOptions(){
 // ---------- Main render ----------
 async function render(){
   stopActiveSessionPoll();
+  stopUsersPoll();
   if(!user){loginView();return;}
   try{
     if(page==='dashboard')await dashboard();
@@ -629,6 +644,7 @@ async function submitScan(){
     }
   },e=>{
     const errMsg=e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Move outside or enable GPS and retry.';
+    if(e.code===1) showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
     if(alertBox){
       alertBox.innerHTML=`<div class="geofence-alert">
         <h4>📍 Location Access Error</h4>
@@ -638,7 +654,66 @@ async function submitScan(){
     notice(errMsg,'error');
   },{enableHighAccuracy:true,timeout:20000,maximumAge:0});
 }
-function getFreshLocation(){return new Promise((resolve,reject)=>{if(!navigator.geolocation){reject(new Error('This browser does not provide location services.'));return;}navigator.geolocation.getCurrentPosition(pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),e=>reject(new Error(e.code===1?'Location permission is required. Enable precise location and try again.':'Could not get a precise location. Enable GPS and retry.')),{enableHighAccuracy:true,timeout:20000,maximumAge:0});});}
+function showLocationHelpModal(message) {
+  const existing = document.querySelector('#modal-location-help');
+  if (existing) existing.remove();
+  const container = document.createElement('div');
+  container.innerHTML = `<div class="modal-overlay" id="modal-location-help">
+    <div class="modal-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;color:var(--danger)">
+        <span style="font-size:28px">📍</span>
+        <h3 style="margin:0">Location Permission Required</h3>
+      </div>
+      <p style="margin-bottom:16px;color:var(--muted)">${esc(message || 'Browser location access was blocked or unavailable.')}</p>
+      
+      <div style="background:var(--bg-muted);padding:14px;border-radius:10px;font-size:13px;line-height:1.6;margin-bottom:18px">
+        <b>How to enable location access:</b>
+        <ol style="margin:8px 0 0;padding-left:20px">
+          <li>Look at your browser address bar (top left next to the URL).</li>
+          <li>Click the <b>lock icon 🔒</b> or <b>tune icon 🛠️</b>.</li>
+          <li>Find <b>Location</b> and change setting to <b>Allow</b>.</li>
+          <li>If on Mac, open <b>System Settings ⚙️ → Privacy & Security → Location Services</b> and enable your browser.</li>
+          <li>Refresh this page and try again!</li>
+        </ol>
+      </div>
+
+      <div style="display:flex;gap:10px">
+        <button class="button primary" style="flex:1" onclick="document.querySelector('#modal-location-help')?.remove();location.reload();">Refresh Page</button>
+        <button type="button" class="button" data-action="close-modal">Close</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(container.firstElementChild);
+}
+function getFreshLocation(){
+  return new Promise((resolve,reject)=>{
+    if(!navigator.geolocation){reject(new Error('This browser does not provide location services.'));return;}
+    navigator.geolocation.getCurrentPosition(
+      pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),
+      err=>{
+        if(err.code===1){
+          showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
+          reject(new Error('Location permission is required. Enable location in your browser and Mac System Settings.'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          pos=>resolve({latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy}),
+          err2=>{
+            if(err2.code===1){
+              showLocationHelpModal('Location access is blocked in your browser or Mac System Settings.');
+              reject(new Error('Location permission is required. Enable location in your browser and Mac System Settings.'));
+            } else {
+              showLocationHelpModal('Could not retrieve your location. Check your GPS / network connection.');
+              reject(new Error('Could not get location. Enable GPS or network location and retry.'));
+            }
+          },
+          {enableHighAccuracy:false,timeout:12000,maximumAge:10000}
+        );
+      },
+      {enableHighAccuracy:true,timeout:8000,maximumAge:5000}
+    );
+  });
+}
 async function sessionDetail(id){
   const d=await call('attendance/session',{query:`&session_id=${id}`});
   const rows=(d.attendance||[]).map(a=>`<tr><td>${esc(a.full_name)}</td><td>${esc(a.student_no)}</td><td>${esc(a.class_name)}</td><td>${statusPill(a.status)}</td><td>${dateTime(a.recorded_at)}</td></tr>`).join('');
@@ -744,7 +819,15 @@ app.addEventListener('click',async e=>{
     if(action==='admin-teacher-assignments')return openAdminTeacherAssignmentsModal(b.dataset.id, b.dataset.name);
     if(action==='admin-delete-teacher-assignment'){
       if(confirm('Are you sure you want to remove this assignment from the teacher?')){
-        await call('admin/teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        try {
+          await call('admin/teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        } catch(err) {
+          if(err.message.includes('SESSIONS_EXIST') || err.message.includes('attendance sessions have')){
+            if(confirm('Attendance sessions have already been recorded for this assignment.\n\nDo you want to FORCE OVERWRITE and delete all recorded sessions for this subject?')){
+              await call('admin/teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id),force:true}});
+            } else { return; }
+          } else { throw err; }
+        }
         await openAdminTeacherAssignmentsModal(b.dataset.teacher);
         notice('Assignment removed successfully.','success');
       }
@@ -752,7 +835,15 @@ app.addEventListener('click',async e=>{
     }
     if(action==='teacher-delete-assignment'){
       if(confirm('Are you sure you want to remove this assignment?')){
-        await call('teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        try {
+          await call('teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        } catch(err) {
+          if(err.message.includes('SESSIONS_EXIST') || err.message.includes('attendance sessions have')){
+            if(confirm('Attendance sessions have already been recorded for this assignment.\n\nDo you want to FORCE OVERWRITE and delete all recorded sessions for this subject?')){
+              await call('teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id),force:true}});
+            } else { return; }
+          } else { throw err; }
+        }
         const me = await call('me');
         user = me.user;
         localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -870,7 +961,15 @@ app.addEventListener('submit',async e=>{
       notice(res.message||'Account created and activated!','success');
       return;
     }
-    if(form.id==='register-form'){const fd=new FormData(form);const body={full_name:fd.get('full_name'),username:fd.get('username'),password:fd.get('password'),role:fd.get('role')};if(body.role==='student'){body.identifier=fd.get('identifier');body.academic_year_id=Number(fd.get('academic_year_id'));body.semester_id=Number(fd.get('semester_id'));}const result=await call('register',{method:'POST',body});loginView(result.message||'Registration submitted.');return;}
+    if(form.id==='register-form'){
+      const fd=new FormData(form);
+      const body={full_name:fd.get('full_name'),username:fd.get('username'),password:fd.get('password'),role:fd.get('role')};
+      if(body.role==='student'){body.identifier=fd.get('identifier');body.academic_year_id=Number(fd.get('academic_year_id'));body.semester_id=Number(fd.get('semester_id'));}
+      const result=await call('register',{method:'POST',body});
+      invalidateCache('admin/users');
+      loginView(result.message||'Registration submitted.');
+      return;
+    }
     if(form.id==='subject-form'){const fd=new FormData(form);await call('admin/subject',{method:'POST',body:{code:fd.get('code'),name:fd.get('name'),semester_id:Number(fd.get('semester_id'))}});invalidateCache('subjects');invalidateCache('registration/subjects');await subjectsPage();notice('Subject saved.','success');return;}
     if(form.id==='edit-subject-form'){
       const fd=new FormData(form);
@@ -888,20 +987,53 @@ app.addEventListener('submit',async e=>{
     }
     if(form.id==='admin-teacher-assignments-form'){
       const fd=new FormData(form);
-      const res=await call('admin/teacher/assignments',{method:'POST',body:{
+      const payload = {
         teacher_id:fd.get('teacher_id'),
         academic_year_id:Number(fd.get('academic_year_id')),
         semester_id:Number(fd.get('semester_id')),
         class_id:Number(fd.get('class_id')),
         subject_ids:fd.getAll('subject_ids[]').map(Number)
-      }});
+      };
+      let res;
+      try {
+        res=await call('admin/teacher/assignments',{method:'POST',body:payload});
+      } catch(err) {
+        if(err.message.includes('SESSIONS_EXIST') || err.message.includes('attendance sessions have')){
+          if(confirm('Some removed subjects have recorded attendance sessions.\n\nDo you want to FORCE OVERWRITE and delete all recorded sessions for removed subjects?')){
+            res=await call('admin/teacher/assignments',{method:'POST',body:{...payload,force:true}});
+          } else { return; }
+        } else { throw err; }
+      }
       document.querySelector('#modal-admin-teacher-assignments')?.remove();
       invalidateCache('admin/users');
       await usersPage();
       notice(res.message||'Teacher assignment saved successfully!','success');
       return;
     }
-    if(form.id==='assignment-form'){const fd=new FormData(form);const result=await call('teacher/assignments',{method:'POST',body:{academic_year_id:Number(fd.get('academic_year_id')),semester_id:Number(fd.get('semester_id')),class_id:Number(fd.get('class_id')),subject_ids:fd.getAll('subject_ids[]').map(Number)}});user=result.user||user;localStorage.setItem(USER_KEY,JSON.stringify(user));await assignmentPage();notice('Academic assignment saved.','success');return;}
+    if(form.id==='assignment-form'){
+      const fd=new FormData(form);
+      const payload = {
+        academic_year_id:Number(fd.get('academic_year_id')),
+        semester_id:Number(fd.get('semester_id')),
+        class_id:Number(fd.get('class_id')),
+        subject_ids:fd.getAll('subject_ids[]').map(Number)
+      };
+      let result;
+      try {
+        result=await call('teacher/assignments',{method:'POST',body:payload});
+      } catch(err) {
+        if(err.message.includes('SESSIONS_EXIST') || err.message.includes('attendance sessions have')){
+          if(confirm('Some of your removed subjects have recorded attendance sessions.\n\nDo you want to FORCE OVERWRITE and delete all recorded sessions for those subjects?')){
+            result=await call('teacher/assignments',{method:'POST',body:{...payload,force:true}});
+          } else { return; }
+        } else { throw err; }
+      }
+      user=result.user||user;
+      localStorage.setItem(USER_KEY,JSON.stringify(user));
+      await assignmentPage();
+      notice('Academic assignment saved.','success');
+      return;
+    }
     if(form.id==='create-session'){const fd=new FormData(form);notice('Getting your location to set the attendance area…');const location=await getFreshLocation();if(location.accuracy>100)throw new Error('Your location is not accurate enough to start a session. Enable precise GPS and try again.');const result=await call('attendance/create',{method:'POST',body:{title:fd.get('title'),teacher_subject_id:Number(fd.get('teacher_subject_id')),...location}});activeSession=result.session||result;await createPage();notice('QR session started. The 100 m area is centered on the saved teacher location.','success');return;}
     // FIX: DOM bug — use stable wrapper container instead of replacing table-wrap node
     if(form.id==='month-form'){
