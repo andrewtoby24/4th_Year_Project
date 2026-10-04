@@ -481,18 +481,31 @@ async function api(request: Request) {
     const hash = await tokenHash(baseToken);
     const session = await one(admin.from("attendance_sessions").select("*").eq("qr_token_hash", hash).maybeSingle());
     if (!session || !session.active) throw new HttpError("This QR session is invalid or has ended.", 410, "SESSION_ENDED");
-    // FIXED: parallel fetch of assignment+term and student
+    // FIXED: Parallel fetch of assignment+term and student with academic_year details
     const [assignmentRow, studentRow] = await Promise.all([
-      one(admin.from("teacher_subjects").select("id,subject_id,teacher_term_id,term:teacher_terms(semester_id,class_id)").eq("id", session.teacher_subject_id).single()),
-      one(admin.from("students").select("id,class_id,semester_id").eq("user_id", profile.id).single()),
+      one(admin.from("teacher_subjects").select("id,subject_id,teacher_term_id,term:teacher_terms(semester_id,class_id,class:classes(id,academic_year_id))").eq("id", session.teacher_subject_id).single()),
+      one(admin.from("students").select("id,class_id,semester_id,class:classes(id,academic_year_id)").eq("user_id", profile.id).single()),
     ]);
     const term = assignmentRow.term;
-    if (studentRow.class_id !== term.class_id || studentRow.semester_id !== term.semester_id) throw new HttpError("This attendance session is for a different class or semester.", 403, "WRONG_CLASS");
+    const termClass = term?.class;
+    const studentClass = studentRow?.class;
+
+    // Match by class_id OR by academic_year_id (prevents semester ID mismatch for same-year students)
+    const isSameClass = studentRow.class_id === term.class_id;
+    const isSameYear = Boolean(studentClass?.academic_year_id && termClass?.academic_year_id && studentClass.academic_year_id === termClass.academic_year_id);
+    if (!isSameClass && !isSameYear) throw new HttpError("This attendance session is for a different class or academic year.", 403, "WRONG_CLASS");
+
     if (!Number.isFinite(session.center_latitude) || !Number.isFinite(session.center_longitude)) throw new HttpError("This QR session has no saved location. End it and start a new session.", 409, "SESSION_LOCATION_REQUIRED");
+    
     const radius = Number(session.attendance_radius_meters) || 100;
-    const distance = distanceMeters(latitude, longitude, session.center_latitude, session.center_longitude);
-    if (distance > radius) {
-      const distMeters = Math.round(distance);
+    const rawDistance = distanceMeters(latitude, longitude, session.center_latitude, session.center_longitude);
+    
+    // Accuracy Buffer: Subtract GPS/Wi-Fi location uncertainty (up to 40m) to prevent false "Out of Area" errors inside classroom
+    const accuracyBuffer = Math.min(accuracy, 40);
+    const effectiveDistance = Math.max(0, rawDistance - accuracyBuffer);
+
+    if (effectiveDistance > radius) {
+      const distMeters = Math.round(rawDistance);
       throw new HttpError(`📍 Outside Allowed Radius: You are ${distMeters} meters away from the classroom (allowed limit is ${radius} meters). Move closer to the teacher's device and try again.`, 403, "OUTSIDE_ALLOWED_AREA");
     }
     // Determine late status
