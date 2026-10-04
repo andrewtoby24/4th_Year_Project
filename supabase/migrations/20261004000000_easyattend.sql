@@ -173,3 +173,6 @@ grant usage on schema public to anon, authenticated, service_role;
 grant select on public.academic_years, public.semesters, public.classes, public.subjects to anon, authenticated;
 grant all privileges on all tables in schema public to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+-- Campus center, radius, and allowed web origins are runtime Edge Function secrets,
+-- configured per deployment in docs/SUPABASE_SETUP.md.
