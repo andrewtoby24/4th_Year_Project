@@ -322,13 +322,46 @@ async function createPage(){
   activeSession=result.session;
   shell(`${heading('TEACHER','Create QR session','The 100 m attendance area is centered on your device when you start the session.')}${card(activeSession?'Active QR token':'Start attendance',activeSession?`<div class="qr-layout"><div><span class="pill good">SESSION ACTIVE</span><h3>${esc(activeSession.subject?.code||'')} — ${esc(activeSession.subject?.name||activeSession.title)}</h3><p>${esc(activeSession.class_name)} · ${dateTime(activeSession.starts_at)}</p><p class="muted">Attendance radius: ${Number(activeSession.attendance_radius_meters)||100} m from the location saved when this session started.</p><canvas id="qr-canvas"></canvas><p class="token">${esc(activeSession.token)}</p><button class="button danger" data-action="end-session" id="btn-end-session">End session</button></div><div id="live-count" class="stat"><span>Students present</span><strong>—</strong></div></div>`:`<form id="create-session" class="form-stack"><label>Class and subject<select name="teacher_subject_id" required>${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} — ${esc(a.name)}</option>`).join('')}</select></label><label>Session title<input name="title" value="Class attendance" maxlength="150" required></label><p class="muted">Allow location access. Your current location will become the center of the 100 m attendance area for this session.</p><button class="button primary" id="btn-generate-qr">Generate QR</button></form>`,'narrow')}${card('Attendance sessions',`<div class="button-row"><select id="sessions-assignment">${assignments.map(a=>`<option value="${a.assignment_id}">${esc(a.class_name)} · ${esc(a.code||'')} ${esc(a.name)}</option>`).join('')}</select><button class="button" data-action="load-sessions">Refresh</button></div><div id="session-list" class="stack"></div>`)}`);
   if(activeSession){
-    drawQR(activeSession.qr_payload);
+    const payload = activeSession.qr_payload || (activeSession.token ? `ATTENDQR:${activeSession.token}` : '');
+    drawQR(payload);
     updateLiveAttendanceCount();
     activeSessionPollTimer = setInterval(updateLiveAttendanceCount, 5000);
   }
   await loadSessions();
 }
-async function drawQR(value){if(!value)return;try{const c=document.querySelector('#qr-canvas');if(c)await QRCode.toCanvas(c,value,{width:220,margin:2,color:{dark:'#12263a',light:'#fffaf0'}});}catch(e){notice(e.message,'error');}}
+async function drawQR(value){
+  if(!value)return;
+  const c=document.querySelector('#qr-canvas');
+  if(!c)return;
+  if(window.qrcode){
+    try{
+      const qr=window.qrcode(0,'M');
+      qr.addData(value);
+      qr.make();
+      const count=qr.getModuleCount();
+      const size=220;
+      const margin=10;
+      const cellSize=(size-margin*2)/count;
+      c.width=size;
+      c.height=size;
+      const ctx=c.getContext('2d');
+      ctx.fillStyle='#fffaf0';
+      ctx.fillRect(0,0,size,size);
+      ctx.fillStyle='#12263a';
+      for(let r=0;r<count;r++){
+        for(let col=0;col<count;col++){
+          if(qr.isDark(r,col)){
+            ctx.fillRect(Math.floor(margin+col*cellSize),Math.floor(margin+r*cellSize),Math.ceil(cellSize),Math.ceil(cellSize));
+          }
+        }
+      }
+      return;
+    }catch(e){console.error('QR render error:',e);}
+  }
+  if(window.QRCode?.toCanvas){
+    try{await window.QRCode.toCanvas(c,value,{width:220,margin:2,color:{dark:'#12263a',light:'#fffaf0'}});}catch(e){notice(e.message,'error');}
+  }
+}
 async function loadSessions(){
   const selector=document.querySelector('#sessions-assignment');if(!selector)return;
   const data=await call('attendance/sessions',{query:`&teacher_subject_id=${selector.value}`});
