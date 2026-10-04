@@ -51,8 +51,8 @@ function warmUpApi() {
   if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) return;
   fetch(`${API_URL}?action=health`, { method: 'GET', headers: { 'apikey': SUPABASE_PUBLISHABLE_KEY }, credentials: 'omit' }).catch(() => {});
 }
-// Keep Edge Function warm every 4 minutes — prevents cold-start lag entirely
-setInterval(warmUpApi, 4 * 60 * 1000);
+// Keep Edge Function warm every 2 minutes — prevents cold-start lag entirely
+setInterval(warmUpApi, 2 * 60 * 1000);
 
 // ---------- Stale-while-revalidate cache ----------
 // Shows cached data INSTANTLY, then silently refreshes in background.
