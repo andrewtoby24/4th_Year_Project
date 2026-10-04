@@ -424,11 +424,9 @@ async function api(request: Request) {
     return { code: "SUCCESS", message: statusMsg, status: attendStatus, distance_from_classroom: distance, allowed_radius: radius };
   }
 
-  // ---------- Teacher endpoints ----------
-  if (action === "teacher/assignments") {
-    requireRole(profile, "teacher");
-    const yearId = Number(input.academic_year_id), semesterId = Number(input.semester_id), classId = Number(input.class_id),
-      ids = [...new Set((Array.isArray(input.subject_ids) ? input.subject_ids : [input.subject_ids]).map(Number).filter(Boolean))];
+  // Helper: Save assignments for a target teacher
+  async function saveTeacherAssignments(targetTeacherId: string, yearId: number, semesterId: number, classId: number, subjectIds: number[]) {
+    const ids = [...new Set((Array.isArray(subjectIds) ? subjectIds : [subjectIds]).map(Number).filter(Boolean))];
     const [year, sem, cls] = await Promise.all([
       one(admin.from("academic_years").select("id").eq("id", yearId).maybeSingle()),
       one(admin.from("semesters").select("id,academic_year_id").eq("id", semesterId).maybeSingle()),
@@ -438,7 +436,7 @@ async function api(request: Request) {
     const allowed = await one(admin.from("subjects").select("id").eq("semester_id", semesterId).eq("teacher_registration_enabled", true).in("id", ids.length ? ids : [-1]));
     if (allowed.length !== ids.length) throw new HttpError("Subjects must belong to the selected semester.", 422);
     if (!ids.length) throw new HttpError("Select at least one subject.", 422);
-    const term = await one(admin.from("teacher_terms").upsert({ teacher_id: profile.id, semester_id: semesterId, class_id: classId }, { onConflict: "teacher_id,semester_id,class_id" }).select("id").single());
+    const term = await one(admin.from("teacher_terms").upsert({ teacher_id: targetTeacherId, semester_id: semesterId, class_id: classId }, { onConflict: "teacher_id,semester_id,class_id" }).select("id").single());
     const existing = await one(admin.from("teacher_subjects").select("id,subject_id").eq("teacher_term_id", term.id));
     const remove = existing.filter((x: any) => !ids.includes(x.subject_id));
     if (remove.length) {
@@ -449,7 +447,44 @@ async function api(request: Request) {
     const had = new Set(existing.map((x: any) => x.subject_id));
     const adds = ids.filter(id => !had.has(id));
     if (adds.length) ok(await admin.from("teacher_subjects").insert(adds.map(subject_id => ({ teacher_term_id: term.id, subject_id }))));
+    return { message: "Academic assignment saved successfully." };
+  }
+
+  // ---------- Teacher endpoints ----------
+  if (action === "teacher/assignments") {
+    requireRole(profile, "teacher");
+    await saveTeacherAssignments(profile.id, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids);
     return { message: "Academic assignment saved.", user: await asUser(profile) };
+  }
+  if (action === "admin/teacher/assignments") {
+    requireRole(profile, "admin");
+    const teacherId = String(input.teacher_id || "");
+    if (!teacherId) throw new HttpError("Teacher ID is required.", 422);
+    const teacherProf = await one(admin.from("profiles").select("id,role").eq("id", teacherId).maybeSingle());
+    if (!teacherProf || teacherProf.role !== "teacher") throw new HttpError("Target user is not a teacher.", 422);
+    await saveTeacherAssignments(teacherId, Number(input.academic_year_id), Number(input.semester_id), Number(input.class_id), input.subject_ids);
+    return { message: "Teacher assignment updated successfully.", subjects: await assignmentsFor(teacherId) };
+  }
+  if (action === "admin/teacher/assignments/list") {
+    requireRole(profile, "admin");
+    const teacherId = String(input.teacher_id || "");
+    if (!teacherId) throw new HttpError("Teacher ID is required.", 422);
+    const teacherProf = await one(admin.from("profiles").select("id,full_name,username").eq("id", teacherId).single());
+    return { teacher: teacherProf, subjects: await assignmentsFor(teacherId) };
+  }
+  if (action === "teacher/assignments/delete" || action === "admin/teacher/assignments/delete") {
+    const assignmentId = Number(input.assignment_id);
+    if (!assignmentId) throw new HttpError("Assignment ID is required.", 422);
+    const link = await one(admin.from("teacher_subjects").select("id,teacher_term_id").eq("id", assignmentId).maybeSingle());
+    if (!link) throw new HttpError("Assignment not found.", 404);
+    if (profile.role !== "admin") {
+      const term = await one(admin.from("teacher_terms").select("teacher_id").eq("id", link.teacher_term_id).single());
+      if (term.teacher_id !== profile.id) throw new HttpError("Forbidden.", 403);
+    }
+    const sessions = await one(admin.from("attendance_sessions").select("id").eq("teacher_subject_id", assignmentId));
+    if (sessions.length) throw new HttpError("Cannot remove this assignment because attendance sessions have already been recorded for it.", 409);
+    await one(admin.from("teacher_subjects").delete().eq("id", assignmentId));
+    return { message: "Assignment deleted successfully." };
   }
   if (action === "attendance/create") {
     requireRole(profile, "teacher");

@@ -242,8 +242,18 @@ async function teacherDashboard(){
 // ---------- Admin pages ----------
 async function usersPage(){
   const {users=[]}=await callCached('admin/users');
-  const rows=users.map(u=>`<tr><td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td><td>${esc(u.role)}</td><td>${statusPill(u.status)}</td><td class="actions">${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}</td></tr>`).join('');
-  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}`);
+  const rows=users.map(u=>`<tr>
+    <td><b>${esc(u.full_name)}</b><small>${esc(u.username)}</small></td>
+    <td>${esc(u.role)}</td>
+    <td>${statusPill(u.status)}</td>
+    <td class="actions">
+      ${u.role==='teacher'?`<button class="button small primary" data-action="admin-teacher-assignments" data-id="${u.id}" data-name="${esc(u.full_name)}">Reassign Subjects</button>`:''}
+      ${u.status==='pending'?`<button class="button small primary" data-action="approve" data-id="${u.id}">Approve</button>`:''}
+      ${u.role==='student'?`<button class="button small" data-action="reset-device" data-id="${u.id}">Reset device</button>`:''}
+      ${u.role!=='admin'?`<button class="button small" data-action="status" data-id="${u.id}" data-status="${u.status==='disabled'?'active':'disabled'}">${u.status==='disabled'?'Enable':'Disable'}</button>`:''}
+    </td>
+  </tr>`).join('');
+  shell(`${heading('ADMINISTRATOR','User management','Approve accounts, manage access, and create new teachers.')}${card('➕ Create New Account (Instantly Active)',`<form id="admin-create-user-form" class="form-grid"><label>Full name<input name="full_name" required placeholder="e.g. Daw Thida / U Aung" maxlength="120"></label><label>Username<input name="username" required placeholder="e.g. teacher_thida" minlength="3" maxlength="50"></label><label>Password<input name="password" type="password" required minlength="8" placeholder="At least 8 chars"></label><label>Role<select name="role" id="admin-user-role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="admin">Administrator</option></select></label><div id="admin-student-fields" style="display:none;grid-column:1/-1" class="form-grid"><label>Student roll number (e.g. 4IT15)<input name="student_no" placeholder="4IT15"></label></div><button class="button primary" style="grid-column:1/-1">Create and Activate Account</button></form>`)}${card('Accounts',rowsTable(['NAME','ROLE','STATUS','ACTIONS'],rows,'No accounts have registered yet.'))}<div id="admin-teacher-assignment-container"></div>`);
 }
 async function subjectsPage(){
   const [list,reg]=await Promise.all([callCached('subjects'),callCached('registration/subjects')]);
@@ -457,12 +467,11 @@ async function loadAttendanceSessions(){
 }
 async function assignmentPage(){
   const assignments=user.subjects||[];
-  // If catalog is already loaded, render instantly without waiting for network
   if (!catalog) {
     shell(`${heading('TEACHER','Academic assignments','Choose a class, semester, and the subjects you teach.')}${skeletonCard(2)}`);
     catalog = await callCached('registration/subjects');
   }
-  shell(`${heading('TEACHER','Academic assignments','Choose a class, semester, and the subjects you teach.')}${card('Choose an assignment',`<form id="assignment-form" class="form-stack"><div class="form-grid"><label>Academic year<select name="academic_year_id" id="assignment-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Class<select name="class_id" id="assignment-class"></select></label><label>Semester<select name="semester_id" id="assignment-semester"></select></label></div><fieldset><legend>Subjects</legend><div id="assignment-subjects" class="check-list"></div></fieldset><button class="button primary">Save assignment</button></form>`)}${card('Current assignments',assignments.map(a=>`<div class="assignment"><b>${esc(a.academic_year_name)} · ${esc(a.semester_name)} · ${esc(a.class_name)}</b><span>${esc(a.code||'')} — ${esc(a.name)}</span></div>`).join('')||'<p>No assignments have been saved yet.</p>')}`);
+  shell(`${heading('TEACHER','Academic assignments','Choose a class, semester, and the subjects you teach.')}${card('Choose an assignment',`<form id="assignment-form" class="form-stack"><div class="form-grid"><label>Academic year<select name="academic_year_id" id="assignment-year">${(catalog.academic_years||[]).map(y=>`<option value="${y.id}">${esc(y.name)}</option>`).join('')}</select></label><label>Class<select name="class_id" id="assignment-class"></select></label><label>Semester<select name="semester_id" id="assignment-semester"></select></label></div><fieldset><legend>Subjects</legend><div id="assignment-subjects" class="check-list"></div></fieldset><button class="button primary">Save assignment</button></form>`)}${card('Current assignments',assignments.map(a=>`<div class="assignment" style="flex-direction:row;align-items:center;justify-content:space-between"><div><b>${esc(a.academic_year_name)} · ${esc(a.semester_name)} · ${esc(a.class_name)}</b><span style="display:block">${esc(a.code||'')} — ${esc(a.name)}</span></div><button class="button small danger" data-action="teacher-delete-assignment" data-id="${a.assignment_id}">Remove</button></div>`).join('')||'<p>No assignments have been saved yet.</p>')}`);
   updateAssignmentOptions();
 }
 function updateAssignmentOptions(){
@@ -618,6 +627,83 @@ async function sessionDetail(id){
   spot.insertAdjacentHTML('beforeend',`<div class="detail-box"><h3>${esc(d.session?.title||'Session')} · ${d.present_students||0} present / ${d.late_students||0} late / ${d.absent_students||0} absent</h3>${rowsTable(['STUDENT','ROLL NO.','CLASS','STATUS','TIME'],rows,'No check-ins yet.')}</div>`);
 }
 
+async function openAdminTeacherAssignmentsModal(teacherId, teacherName) {
+  const container = document.querySelector('#admin-teacher-assignment-container');
+  if (!container) return;
+  const [data, reg] = await Promise.all([
+    call('admin/teacher/assignments/list', { query: `&teacher_id=${teacherId}` }),
+    callCached('registration/subjects')
+  ]);
+  catalog = reg;
+  const teacher = data.teacher || { id: teacherId, full_name: teacherName };
+  const subjects = data.subjects || [];
+
+  container.innerHTML = `<div class="modal-overlay" id="modal-admin-teacher-assignments">
+    <div class="modal-card wide">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 style="margin:0">Reassign Subjects · ${esc(teacher.full_name)}</h3>
+        <button class="button small" data-action="close-modal">✕ Close</button>
+      </div>
+
+      <div style="margin-bottom:20px">
+        <h4 style="margin:0 0 8px">Currently Assigned Subjects</h4>
+        ${subjects.length === 0 ? '<p class="muted">No subjects currently assigned to this teacher.</p>' : `
+          <div class="stack">
+            ${subjects.map(s => `<div class="assignment" style="flex-direction:row;align-items:center;justify-content:space-between;padding:10px 14px">
+              <div>
+                <b>${esc(s.academic_year_name)} · ${esc(s.semester_name)} · ${esc(s.class_name)}</b>
+                <span style="display:block">${esc(s.code||'')} — ${esc(s.name)}</span>
+              </div>
+              <button class="button small danger" data-action="admin-delete-teacher-assignment" data-id="${s.assignment_id}" data-teacher="${teacher.id}">Remove</button>
+            </div>`).join('')}
+          </div>
+        `}
+      </div>
+
+      <div style="border-top:1px solid var(--line);padding-top:16px">
+        <h4 style="margin:0 0 12px">Add / Reassign Subjects</h4>
+        <form id="admin-teacher-assignments-form" class="form-stack">
+          <input type="hidden" name="teacher_id" value="${teacher.id}">
+          <div class="form-grid">
+            <label>Academic year
+              <select name="academic_year_id" id="admin-assign-year">
+                ${(catalog.academic_years||[]).map(y => `<option value="${y.id}">${esc(y.name)}</option>`).join('')}
+              </select>
+            </label>
+            <label>Class<select name="class_id" id="admin-assign-class"></select></label>
+            <label>Semester<select name="semester_id" id="admin-assign-sem"></select></label>
+          </div>
+          <fieldset>
+            <legend>Select Subjects to Assign</legend>
+            <div id="admin-assign-subjects" class="check-list"></div>
+          </fieldset>
+          <div style="display:flex;gap:10px;margin-top:10px">
+            <button class="button primary" style="flex:1">Save Teacher Assignment</button>
+            <button type="button" class="button" data-action="close-modal">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>`;
+
+  updateAdminAssignOptions(teacher.id);
+}
+
+function updateAdminAssignOptions(teacherId) {
+  const f = document.querySelector('#admin-teacher-assignments-form');
+  if (!f || !catalog) return;
+  const year = Number(f.elements.academic_year_id.value);
+  const cl = f.elements.class_id; const selectedClass = Number(cl.value);
+  cl.innerHTML = (catalog.classes||[]).filter(c => Number(c.academic_year_id) === year).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  if (selectedClass && [...cl.options].some(o => Number(o.value) === selectedClass)) cl.value = String(selectedClass);
+  const sem = f.elements.semester_id; const selectedSem = Number(sem.value);
+  sem.innerHTML = (catalog.semesters||[]).filter(s => Number(s.academic_year_id) === year).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  if (selectedSem && [...sem.options].some(o => Number(o.value) === selectedSem)) sem.value = String(selectedSem);
+
+  const matching = (catalog.subjects||[]).filter(s => Number(s.semester_id) === Number(sem.value));
+  document.querySelector('#admin-assign-subjects').innerHTML = matching.map(s => `<label class="check"><input type="checkbox" name="subject_ids[]" value="${s.id}"><span>${esc(s.code||'Subject')} — ${esc(s.name)}</span></label>`).join('') || '<span class="muted">No subjects configured for this semester.</span>';
+}
+
 // ---------- Event listeners ----------
 app.addEventListener('click',async e=>{
   const b=e.target.closest('[data-action]');if(!b)return;
@@ -633,6 +719,26 @@ app.addEventListener('click',async e=>{
     if(action==='approve'){await call('admin/verify',{method:'POST',body:{user_id:b.dataset.id}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='status'){await call('admin/status',{method:'POST',body:{user_id:b.dataset.id,status:b.dataset.status}});invalidateCache('admin/users');await usersPage();return;}
     if(action==='reset-device'){await call('admin/device/reset',{method:'POST',body:{user_id:b.dataset.id}});notice('Student device registration reset.','success');return;}
+    if(action==='admin-teacher-assignments')return openAdminTeacherAssignmentsModal(b.dataset.id, b.dataset.name);
+    if(action==='admin-delete-teacher-assignment'){
+      if(confirm('Are you sure you want to remove this assignment from the teacher?')){
+        await call('admin/teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        await openAdminTeacherAssignmentsModal(b.dataset.teacher);
+        notice('Assignment removed successfully.','success');
+      }
+      return;
+    }
+    if(action==='teacher-delete-assignment'){
+      if(confirm('Are you sure you want to remove this assignment?')){
+        await call('teacher/assignments/delete',{method:'POST',body:{assignment_id:Number(b.dataset.id)}});
+        const me = await call('me');
+        user = me.user;
+        localStorage.setItem(USER_KEY, JSON.stringify(user));
+        await assignmentPage();
+        notice('Assignment removed successfully.','success');
+      }
+      return;
+    }
     if(action==='start-camera')return startCamera();
     if(action==='submit-scan')return submitScan();
     if(action==='end-session'){await call('attendance/end',{method:'POST',body:{session_id:activeSession?.id}});stopQrTimer();notice('QR session ended. Absent students have been marked automatically.','success');return createPage();}
@@ -758,6 +864,21 @@ app.addEventListener('submit',async e=>{
       notice('Subject updated successfully!','success');
       return;
     }
+    if(form.id==='admin-teacher-assignments-form'){
+      const fd=new FormData(form);
+      const res=await call('admin/teacher/assignments',{method:'POST',body:{
+        teacher_id:fd.get('teacher_id'),
+        academic_year_id:Number(fd.get('academic_year_id')),
+        semester_id:Number(fd.get('semester_id')),
+        class_id:Number(fd.get('class_id')),
+        subject_ids:fd.getAll('subject_ids[]').map(Number)
+      }});
+      document.querySelector('#modal-admin-teacher-assignments')?.remove();
+      invalidateCache('admin/users');
+      await usersPage();
+      notice(res.message||'Teacher assignment saved successfully!','success');
+      return;
+    }
     if(form.id==='assignment-form'){const fd=new FormData(form);const result=await call('teacher/assignments',{method:'POST',body:{academic_year_id:Number(fd.get('academic_year_id')),semester_id:Number(fd.get('semester_id')),class_id:Number(fd.get('class_id')),subject_ids:fd.getAll('subject_ids[]').map(Number)}});user=result.user||user;localStorage.setItem(USER_KEY,JSON.stringify(user));await assignmentPage();notice('Academic assignment saved.','success');return;}
     if(form.id==='create-session'){const fd=new FormData(form);notice('Getting your location to set the attendance area…');const location=await getFreshLocation();if(location.accuracy>100)throw new Error('Your location is not accurate enough to start a session. Enable precise GPS and try again.');const result=await call('attendance/create',{method:'POST',body:{title:fd.get('title'),teacher_subject_id:Number(fd.get('teacher_subject_id')),...location}});activeSession=result.session||result;await createPage();notice('QR session started. The 100 m area is centered on the saved teacher location.','success');return;}
     // FIX: DOM bug — use stable wrapper container instead of replacing table-wrap node
@@ -784,6 +905,10 @@ app.addEventListener('change',e=>{
   if(e.target.matches('#edit-subject-year')){
     const s=document.querySelector('#edit-subject-sem');
     if(s&&catalog)s.innerHTML=(catalog.semesters||[]).filter(x=>Number(x.academic_year_id)===Number(e.target.value)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  }
+  if(e.target.matches('#admin-assign-year,#admin-assign-class,#admin-assign-sem')){
+    const f=document.querySelector('#admin-teacher-assignments-form');
+    if(f)updateAdminAssignOptions(f.elements.teacher_id.value);
   }
   if(e.target.matches('#assignment-year,#assignment-class,#assignment-semester'))updateAssignmentOptions();
 });
